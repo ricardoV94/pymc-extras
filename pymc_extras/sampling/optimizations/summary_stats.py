@@ -5,7 +5,7 @@ from pymc.model.fgraph import ModelObservedRV, model_observed_rv
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.rewriting.basic import node_rewriter
 
-from pymc_experimental.sampling.optimizations.optimize import posterior_optimization_db
+from pymc_extras.sampling.optimizations.optimize import posterior_optimization_db
 
 
 @node_rewriter(tracks=[ModelObservedRV])

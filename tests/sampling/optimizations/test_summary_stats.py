@@ -3,7 +3,7 @@ import numpy as np
 from pymc.distributions import HalfNormal, Normal
 from pymc.model.core import Model
 
-from pymc_experimental.sampling.optimizations.optimize import optimize_model_for_mcmc_sampling
+from pymc_extras.sampling.optimizations import optimize_model_for_mcmc_sampling
 
 
 def test_summary_stats_normal():

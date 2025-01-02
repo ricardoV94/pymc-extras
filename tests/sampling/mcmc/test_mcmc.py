@@ -8,7 +8,7 @@ from pymc.model.core import Model
 from pymc.sampling.mcmc import sample
 from pymc.step_methods import Slice
 
-from pymc_experimental import opt_sample
+from pymc_extras import opt_sample
 
 
 def test_custom_step_raises():

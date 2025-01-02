@@ -10,10 +10,10 @@ from pytensor.graph.rewriting.basic import node_rewriter
 from pytensor.tensor.elemwise import DimShuffle
 from pytensor.tensor.subtensor import _sum_grad_over_bcasted_dims as sum_bcasted_dims
 
-from pymc_experimental.sampling.optimizations.conjugate_sampler import (
+from pymc_extras.sampling.optimizations.conjugate_sampler import (
     ConjugateRV,
 )
-from pymc_experimental.sampling.optimizations.optimize import posterior_optimization_db
+from pymc_extras.sampling.optimizations.optimize import posterior_optimization_db
 
 
 def register_conjugacy_rewrites_variants(rewrite_fn, tracks=(ModelFreeRV,)):

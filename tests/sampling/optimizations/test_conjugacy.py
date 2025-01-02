@@ -6,8 +6,8 @@ from pymc.model.core import Model
 from pymc.model.transform.conditioning import remove_value_transforms
 from pymc.sampling import draw
 
-from pymc_experimental.sampling.optimizations.conjugate_sampler import ConjugateRV
-from pymc_experimental.sampling.optimizations.optimize import optimize_model_for_mcmc_sampling
+from pymc_extras.sampling.optimizations import optimize_model_for_mcmc_sampling
+from pymc_extras.sampling.optimizations.conjugate_sampler import ConjugateRV
 
 
 @pytest.mark.parametrize("eager", [False, True])

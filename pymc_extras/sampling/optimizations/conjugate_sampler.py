@@ -13,7 +13,7 @@ from pytensor.compile.builders import OpFromGraph
 from pytensor.link.jax.linker import JAXLinker
 from pytensor.tensor.random.type import RandomGeneratorType
 
-from pymc_experimental.utils.ofg import inline_ofg_outputs
+from pymc_extras.utils.ofg import inline_ofg_outputs
 
 
 class ConjugateRV(OpFromGraph, MeasurableOp):

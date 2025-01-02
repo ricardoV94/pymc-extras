@@ -7,7 +7,6 @@ from pymc.distributions import Bernoulli, Categorical, DiscreteUniform
 from pymc.logprob.abstract import MeasurableOp, _logprob
 from pymc.logprob.basic import conditional_logp, logp
 from pymc.pytensorf import constant_fold
-from pytensor import Variable
 from pytensor.compile.builders import OpFromGraph
 from pytensor.compile.mode import Mode
 from pytensor.graph import Op, vectorize_graph

@@ -4,7 +4,7 @@ from pymc.model.core import Model
 from pymc.sampling.mcmc import sample
 from pytensor.graph.rewriting.basic import GraphRewriter
 
-from pymc_experimental.sampling.optimizations.optimize import (
+from pymc_extras.sampling.optimizations.optimize import (
     TAGS_TYPE,
     optimize_model_for_mcmc_sampling,
 )

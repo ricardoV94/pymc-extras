@@ -24,36 +24,17 @@ from pytensor.tensor.random.type import RandomType
 from pymc_extras.distributions import DiscreteMarkovChain
 
 
-class MarginalRV(OpFromGraph, MeasurableOp):
+class MarginalRV(OpFromGraph):
     """Base class for Marginalized RVs"""
 
     def __init__(
         self,
         *args,
-        dims_connections: tuple[tuple[int | None], ...],
         dims: tuple[Variable, ...],
         **kwargs,
     ) -> None:
-        self.dims_connections = dims_connections
         self.dims = dims
         super().__init__(*args, **kwargs)
-
-    @property
-    def support_axes(self) -> tuple[tuple[int]]:
-        """Dimensions of dependent RVs that belong to the core (non-batched) marginalized variable."""
-        marginalized_ndim_supp = self.inner_outputs[0].owner.op.ndim_supp
-        support_axes_vars = []
-        for dims_connection in self.dims_connections:
-            ndim = len(dims_connection)
-            marginalized_supp_axes = ndim - marginalized_ndim_supp
-            support_axes_vars.append(
-                tuple(
-                    -i
-                    for i, dim in enumerate(reversed(dims_connection), start=1)
-                    if (dim is None or dim > marginalized_supp_axes)
-                )
-            )
-        return tuple(support_axes_vars)
 
     def __eq__(self, other):
         # Just to allow easy testing of equivalent models,
@@ -124,11 +105,35 @@ def support_point_marginal_rv(op: MarginalRV, rv, *inputs):
     return rv_support_point
 
 
-class MarginalFiniteDiscreteRV(MarginalRV):
+class MarginalEnumerableRV(MarginalRV, MeasurableOp):
+
+    def __init__(self, *args,  dims_connections: tuple[tuple[int | None], ...], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dims_connections = dims_connections
+
+    @property
+    def support_axes(self) -> tuple[tuple[int]]:
+        """Dimensions of dependent RVs that belong to the core (non-batched) marginalized variable."""
+        marginalized_ndim_supp = self.inner_outputs[0].owner.op.ndim_supp
+        support_axes_vars = []
+        for dims_connection in self.dims_connections:
+            ndim = len(dims_connection)
+            marginalized_supp_axes = ndim - marginalized_ndim_supp
+            support_axes_vars.append(
+                tuple(
+                    -i
+                    for i, dim in enumerate(reversed(dims_connection), start=1)
+                    if (dim is None or dim > marginalized_supp_axes)
+                )
+            )
+        return tuple(support_axes_vars)
+
+
+class MarginalFiniteDiscreteRV(MarginalEnumerableRV):
     """Base class for Marginalized Finite Discrete RVs"""
 
 
-class MarginalDiscreteMarkovChainRV(MarginalRV):
+class MarginalDiscreteMarkovChainRV(MarginalEnumerableRV):
     """Base class for Marginalized Discrete Markov Chain RVs"""
 
 

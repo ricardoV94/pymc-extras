@@ -115,14 +115,14 @@ def _broadcast_dims(
             if input_dim is None:
                 continue
             if output_dim is not None and output_dim != input_dim:
-                raise ValueError("Different known dimensions mixed via broadcasting")
+                raise ValueError("Different known dimensions mixed in same axis")
             output_dim = input_dim
         output_dims.append(output_dim)
 
     # Check for duplicates
     known_dims = [dim for dim in output_dims if dim is not None]
     if len(known_dims) > len(set(known_dims)):
-        raise ValueError("Same known dimension used in different axis after broadcasting")
+        raise ValueError("Same known dimension used in different axis")
 
     return tuple(output_dims)
 

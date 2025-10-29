@@ -111,7 +111,7 @@ class TestSubgraphBatchDimConnection:
 
         # Mix keys dimensions
         out = base[:, inp, inp.T]
-        with pytest.raises(ValueError, match="Different known dimensions mixed via broadcasting"):
+        with pytest.raises(ValueError, match="Different known dimensions mixed in same axis"):
             subgraph_batch_dim_connection(inp, [out])
 
     def test_elemwise(self):
@@ -122,13 +122,11 @@ class TestSubgraphBatchDimConnection:
         assert dims == (0, 1)
 
         out = inp + inp.T
-        with pytest.raises(ValueError, match="Different known dimensions mixed via broadcasting"):
+        with pytest.raises(ValueError, match="Different known dimensions mixed in same axis"):
             subgraph_batch_dim_connection(inp, [out])
 
         out = inp[None, :, None, :] + inp[:, None, :, None]
-        with pytest.raises(
-            ValueError, match="Same known dimension used in different axis after broadcasting"
-        ):
+        with pytest.raises(ValueError, match="Same known dimension used in different axis"):
             subgraph_batch_dim_connection(inp, [out])
 
     def test_blockwise(self):

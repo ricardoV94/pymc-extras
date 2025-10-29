@@ -186,3 +186,23 @@ class TestSubgraphBatchDimConnection:
         out = CustomDist.dist(inp, dist=dist, size=(4, 3, 2), signature="()->(2)")
         [dims] = subgraph_batch_dim_connection(inp, [out])
         assert dims == (0, 1, 2, None)
+
+    def test_join(self):
+        inp1 = pt.tensor(shape=(4, 4))
+        inp2 = pt.tensor(shape=(4, 4))
+        out = pt.concatenate([inp1[:, None, :], inp2[:, None, :]], axis=1)
+        [dims] = subgraph_batch_dim_connection(inp1, [out])
+        assert dims == (0, None, 1)
+
+        # This is a broadcast operation
+        out = pt.concatenate([inp1[:, None, :], inp1[:, None, :]], axis=1)
+        [dims] = subgraph_batch_dim_connection(inp1, [out])
+        assert dims == (0, None, 1)
+
+        out = pt.concatenate([inp1, inp2], axis=1)
+        with pytest.raises(ValueError, match="Marginalization through axis 1 with known dimension"):
+            subgraph_batch_dim_connection(inp1, [out])
+
+        out = pt.concatenate([inp1[:, None, :], inp1.T[:, None, :]], axis=1)
+        with pytest.raises(ValueError, match="Different known dimensions mixed in same axis"):
+            subgraph_batch_dim_connection(inp1, [out])

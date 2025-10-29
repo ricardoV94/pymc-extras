@@ -6,9 +6,10 @@ from itertools import zip_longest
 from pymc import SymbolicRandomVariable
 from pymc.model.fgraph import ModelVar
 from pymc.variational.minibatch_rv import MinibatchRandomVariable
-from pytensor.graph.basic import Variable
+from pytensor.graph.basic import Constant, Variable
 from pytensor.graph.traversal import ancestors, io_toposort
 from pytensor.tensor import TensorType, TensorVariable
+from pytensor.tensor.basic import Join
 from pytensor.tensor.blockwise import Blockwise
 from pytensor.tensor.elemwise import CAReduce, DimShuffle, Elemwise
 from pytensor.tensor.random.op import RandomVariable
@@ -313,6 +314,23 @@ def _subgraph_batch_dim_connection(var_dims: VAR_DIMS, input_vars, output_vars) 
                 output_dims = start_non_adv_dims + adv_dims + end_non_adv_dims
 
             var_dims[node.outputs[0]] = output_dims
+
+        elif isinstance(node.op, Join):
+            axis, *tensors = node.inputs
+            if not isinstance(axis, Constant):
+                raise NotImplementedError(
+                    f"Marginalization through dynamic axis {axis} in Join / Concatenate operation {node.out} not supported."
+                )
+            axis_value = axis.data
+            _axis_dims, *tensors_dims = inputs_dims
+            output_dims = _broadcast_dims(tensors_dims)
+            if output_dims[axis_value] is not None:
+                raise ValueError(
+                    f"Marginalization through axis {axis} with known dimension in Join / Concatenate operation {node.out} not supported."
+                )
+            var_dims[node.outputs[0]] = (
+                output_dims[:axis_value] + (None,) + output_dims[axis_value + 1 :]
+            )
 
         elif isinstance(node.op, MinibatchRandomVariable):
             var_dims[node.outputs[0]] = inputs_dims[0]

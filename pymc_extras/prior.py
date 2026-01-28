@@ -606,7 +606,7 @@ class Prior:
         self.pytensor_transform = not transform or _get_transform(transform)  # type: ignore
 
     @property
-    def dims(self) -> Dims:
+    def dims(self) -> Dims | None:
         """The dimensions of the variable."""
         return self._dims
 
@@ -614,14 +614,32 @@ class Prior:
     def dims(self, dims) -> None:
         if isinstance(dims, str):
             dims = (dims,)
-
-        if isinstance(dims, list):
+        elif isinstance(dims, list):
             dims = tuple(dims)
 
-        self._dims = dims or ()
+        if dims:
+            if len(dims) != len(set(dims)):
+                raise ValueError("Dims must be unique")
 
-        self._param_dims_work()
-        self._unique_dims()
+            other_dims = set()
+            for value in self.parameters.values():
+                if getattr(value, "dims", None):
+                    other_dims.update(value.dims)
+
+            if not other_dims.issubset(dims):
+                raise UnsupportedShapeError(
+                    f"Parameter dims {other_dims} are not a subset of the prior dims {self.dims}"
+                )
+
+        self._dims = dims
+
+    def with_default_dims(self, default_dims: Dims) -> Prior:
+        """Return itself if dims are specified (not None), or a copy with default_dims"""
+        if self.dims is not None:
+            return self
+        new = copy.deepcopy(self)
+        new.dims = default_dims
+        return new
 
     def __getitem__(self, key: str) -> Prior | Any:
         """Return the parameter of the prior."""
@@ -691,30 +709,12 @@ class Prior:
                 f"Must have at least {msg} parameter for non-centered for {self.distribution!r}"
             )
 
-    def _unique_dims(self) -> None:
-        if not self.dims:
-            return
-
-        if len(self.dims) != len(set(self.dims)):
-            raise ValueError("Dims must be unique")
-
-    def _param_dims_work(self) -> None:
-        other_dims = set()
-        for value in self.parameters.values():
-            if hasattr(value, "dims"):
-                other_dims.update(value.dims)
-
-        if not other_dims.issubset(self.dims):
-            raise UnsupportedShapeError(
-                f"Parameter dims {other_dims} are not a subset of the prior dims {self.dims}"
-            )
-
     def __str__(self) -> str:
         """Return a string representation of the prior."""
         param_str = ", ".join([f"{param}={value}" for param, value in self.parameters.items()])
         param_str = "" if not param_str else f", {param_str}"
 
-        dim_str = f", dims={_dims_to_str(self.dims)}" if self.dims else ""
+        dim_str = f", dims={_dims_to_str(self.dims) if self.dims else 'None'}"
         centered_str = f", centered={self.centered}" if not self.centered else ""
         transform_str = f', transform="{self.transform}"' if self.transform else ""
         return f'Prior("{self.distribution}"{param_str}{dim_str}{centered_str}{transform_str})'

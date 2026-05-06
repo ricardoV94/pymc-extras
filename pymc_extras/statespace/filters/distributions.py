@@ -2,12 +2,11 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from pymc import intX
 from pymc.distributions.dist_math import check_parameters
 from pymc.distributions.distribution import Continuous, SymbolicRandomVariable
 from pymc.distributions.shape_utils import get_support_shape_1d
 from pymc.logprob.abstract import _logprob
-from pymc.pytensorf import normalize_rng_param
+from pymc.pytensorf import intX, normalize_rng_param
 from pytensor.graph.basic import Node
 from pytensor.tensor.random import multivariate_normal
 
@@ -206,11 +205,11 @@ class _LinearGaussianStateSpace(Continuous):
             a = state[:k]
 
             middle_rng, a_innovation = pm.MvNormal.dist(
-                mu=0, cov=Q, rng=rng, method=method
-            ).owner.outputs
+                mu=0, cov=Q, rng=rng, method=method, return_next_rng=True
+            )
             next_rng, y_innovation = pm.MvNormal.dist(
-                mu=0, cov=H, rng=middle_rng, method=method
-            ).owner.outputs
+                mu=0, cov=H, rng=middle_rng, method=method, return_next_rng=True
+            )
 
             a_mu = c + T @ a
             a_next = a_mu + R @ a_innovation
@@ -379,8 +378,8 @@ class SequenceMvNormal(Continuous):
 
         mus_, covs_ = mus.type(), covs.type()
         seq_mvn_rng, mvn_seq = multivariate_normal(
-            mean=mus_, cov=covs_, rng=rng, method=method
-        ).owner.outputs
+            mean=mus_, cov=covs_, rng=rng, method=method, return_next_rng=True
+        )
 
         mvn_seq_op = KalmanFilterRV(
             inputs=[mus_, covs_, logp_, rng], outputs=[seq_mvn_rng, mvn_seq], ndim_supp=2

@@ -7,8 +7,10 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-from pytensor import Mode, Variable, config
+from pytensor import config
 from pytensor import tensor as pt
+from pytensor.compile.mode import Mode
+from pytensor.graph.basic import Variable
 
 from pymc_extras.statespace.core.properties import (
     Coord,
@@ -367,7 +369,7 @@ class StructuralTimeSeries(PyMCStateSpace):
 
     def extract_components_from_idata(self, idata: xr.Dataset) -> xr.Dataset:
         r"""
-        Extract interpretable hidden states from an InferenceData returned by a PyMCStateSpace sampling method
+        Extract interpretable hidden states from a DataTree returned by a PyMCStateSpace sampling method
 
         Parameters
         ----------

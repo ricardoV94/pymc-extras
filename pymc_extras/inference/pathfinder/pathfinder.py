@@ -50,7 +50,7 @@ from pymc.util import (
     get_default_varnames,
 )
 from pytensor.compile.executor import Function
-from pytensor.compile.mode import FAST_COMPILE, Mode
+from pytensor.compile.mode import FAST_COMPILE
 from pytensor.graph import clone_replace, vectorize_graph
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.optimize import LRUCache1
@@ -77,7 +77,6 @@ from pymc_extras.inference.pathfinder.lbfgs import (
 logger = logging.getLogger(__name__)
 
 REGULARISATION_TERM = 1e-8
-DEFAULT_LINKER = "cvm_nogc"
 
 SinglePathfinderFn: TypeAlias = Callable[[int], "PathfinderResult"]
 
@@ -831,8 +830,6 @@ def make_single_pathfinder_fn(
     single_pathfinder_fn : Callable
         A seedable single-path pathfinder function that accepts ``(random_seed, progress_callback=None)``.
     """
-
-    compile_kwargs = {"mode": Mode(linker=DEFAULT_LINKER), **compile_kwargs}
     jacobian = pathfinder_kwargs.get("jacobian", True)
     vectorize = pathfinder_kwargs.get("vectorize", False)
     logp_dlogp_kwargs = {"jacobian": jacobian, **compile_kwargs}

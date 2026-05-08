@@ -24,6 +24,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum, auto
+from sys import stderr
 from typing import Any, Literal, Self, TypeAlias
 
 import numpy as np
@@ -1561,7 +1562,7 @@ def _make_multipath_progress(progressbar: bool) -> CustomProgress:
         ),
         TimeElapsedColumn(table_column=Column("Elapsed", min_width=8, no_wrap=True)),
         include_headers=True,
-        console=Console(theme=default_progress_theme),
+        console=Console(file=stderr, theme=default_progress_theme),
         disable=not progressbar,
     )
 
@@ -1602,6 +1603,7 @@ def _make_progress_callback(progress: CustomProgress, task_id: int) -> Callable[
             progress.update(task_id, **fields)
         if info.get("status") in ("ok", "elbo@0"):
             progress.stop_task(task_id)
+        progress.refresh()
 
     return cb
 

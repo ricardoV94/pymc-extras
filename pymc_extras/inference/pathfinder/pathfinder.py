@@ -1097,19 +1097,17 @@ def _execute_concurrently(
 
     Uses Pipe instead of Manager().Queue() to avoid spawn bootstrapping issues
     when mp_ctx is 'spawn' and the main module is still loading.
-    """
-    import threading
 
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    Progress updates are polled from the main thread so that Rich's Live
+    display refreshes correctly in Jupyter notebooks.
+    """
+    from concurrent.futures import ProcessPoolExecutor
 
     import cloudpickle
 
     mp_ctx = _initialize_multiprocessing_context(mp_ctx, quiet=True)
     fn_pickled = cloudpickle.dumps(fn, protocol=-1)
 
-    # One pipe per worker; avoids Manager() which spawns a process and triggers
-    # "An attempt has been made to start a new process before bootstrapping" when
-    # the main module is still loading (e.g. script run without if __name__ guard).
     n_workers = len(seeds)
     parent_conns = []
     child_conns = []
@@ -1118,24 +1116,15 @@ def _execute_concurrently(
         parent_conns.append(parent)
         child_conns.append(child)
 
-    sentinel_count: list[int] = [0]
-    sentinel_lock = threading.Lock()
-
-    def _listener() -> None:
-        from multiprocessing.connection import wait
-
-        while True:
-            ready = wait(parent_conns, timeout=0.1)
-            for conn in ready:
+    def _drain_progress():
+        """Drain all pending progress messages from worker pipes."""
+        for conn in parent_conns:
+            while conn.poll():
                 try:
                     idx, info = conn.recv()
                 except EOFError:
-                    continue
+                    break
                 if info is None:
-                    with sentinel_lock:
-                        sentinel_count[0] += 1
-                    if sentinel_count[0] >= n_workers:
-                        return
                     continue
                 if (
                     progress_callbacks
@@ -1143,9 +1132,6 @@ def _execute_concurrently(
                     and progress_callbacks[idx] is not None
                 ):
                     progress_callbacks[idx](info)
-
-    listener = threading.Thread(target=_listener, daemon=True)
-    listener.start()
 
     def _run_executor():
         with ProcessPoolExecutor(max_workers=cores, mp_context=mp_ctx) as executor:
@@ -1161,8 +1147,16 @@ def _execute_concurrently(
                 ): i
                 for i, seed in enumerate(seeds)
             }
-            for f in as_completed(futures):
-                yield f.result()
+            pending = set(futures)
+            while pending:
+                _drain_progress()
+                newly_done = {f for f in pending if f.done()}
+                for f in newly_done:
+                    pending.discard(f)
+                    yield f.result()
+                if not newly_done:
+                    time.sleep(0.05)
+            _drain_progress()
 
     try:
         yield from _run_executor()
@@ -1183,7 +1177,6 @@ def _execute_concurrently(
                 c.close()
             except Exception:
                 pass
-        listener.join(timeout=5)
 
 
 def _execute_serially(

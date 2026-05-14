@@ -600,16 +600,18 @@ class StandardFilter(BaseFilter):
         PZT = P.dot(Z.mT)
         F = Z.dot(PZT) + stabilize(H, self.cov_jitter)
 
-        K = pt.linalg.solve(F.mT, PZT.mT, assume_a="pos", check_finite=False).mT
+        F_chol = pt.linalg.cholesky(F, lower=True)
+
+        K = pt.linalg.cho_solve((F_chol, True), PZT.mT).mT
         I_KZ = pt.eye(self.n_states) - K.dot(Z)
 
         a_filtered = a + K @ v
         P_filtered = quad_form_sym(I_KZ, P) + quad_form_sym(K, H)
 
-        F_inv_v = pt.linalg.solve(F, v, assume_a="pos", check_finite=False)
+        F_inv_v = pt.linalg.cho_solve((F_chol, True), v)
         inner_term = v.T @ F_inv_v
 
-        F_logdet = pt.log(pt.linalg.det(F))
+        F_logdet = 2 * pt.log(pt.diag(F_chol)).sum()
 
         ll = pt.switch(
             all_nan_flag,

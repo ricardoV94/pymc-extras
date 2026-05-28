@@ -16,7 +16,7 @@ from pytensor.tensor.shape import Shape
 from pytensor.tensor.subtensor import AdvancedSubtensor, Subtensor, get_idx_list
 from pytensor.tensor.type_other import NoneTypeT
 
-from pymc_extras.model.marginal.distributions import MarginalRV
+from pymc_extras.model.marginal.distributions.core import MarginalRV
 
 
 def static_shape_ancestors(vars):
@@ -34,7 +34,7 @@ def static_shape_ancestors(vars):
 
 
 def find_conditional_input_rvs(output_rvs, all_rvs):
-    """Find conditionally indepedent input RVs."""
+    """Find conditionally independent input RVs."""
     other_rvs = [other_rv for other_rv in all_rvs if other_rv not in output_rvs]
     blockers = other_rvs + static_shape_ancestors(tuple(all_rvs) + tuple(output_rvs))
     return [var for var in ancestors(output_rvs, blockers=blockers) if var in other_rvs]
@@ -43,8 +43,16 @@ def find_conditional_input_rvs(output_rvs, all_rvs):
 def is_conditional_dependent(
     dependent_rv: TensorVariable, dependable_rv: TensorVariable, all_rvs
 ) -> bool:
-    """Check if dependent_rv is conditionall dependent on dependable_rv,
+    """Check if dependent_rv is conditionally dependent on dependable_rv,
     given all conditionally independent all_rvs"""
+
+    # Sibling outputs of the same node are conditionally dependent
+    if (
+        dependent_rv is not dependable_rv
+        and dependent_rv.owner.inputs[0].owner is not None
+        and dependent_rv.owner.inputs[0].owner is dependable_rv.owner.inputs[0].owner
+    ):
+        return True
 
     return dependable_rv in find_conditional_input_rvs((dependent_rv,), all_rvs)
 
@@ -59,15 +67,10 @@ def find_conditional_dependent_rvs(dependable_rv, all_rvs):
 
 
 def get_support_axes(op) -> tuple[tuple[int, ...], ...]:
-    if isinstance(op, MarginalRV):
+    if hasattr(op, "support_axes"):
         return op.support_axes
     else:
-        # For vanilla RVs, the support axes are the last ndim_supp
         return (tuple(range(-op.ndim_supp, 0)),)
-
-
-def _is_tensor_idx(idx) -> bool:
-    return isinstance(idx, Variable) and isinstance(idx.type, TensorType)
 
 
 def _advanced_indexing_axis_and_ndim(idxs) -> tuple[int, int]:
@@ -78,6 +81,10 @@ def _advanced_indexing_axis_and_ndim(idxs) -> tuple[int, int]:
 
     See: https://numpy.org/doc/stable/user/basics.indexing.html#combining-advanced-and-basic-indexing
     """
+
+    def _is_tensor_idx(idx) -> bool:
+        return isinstance(idx, Variable) and isinstance(idx.type, TensorType)
+
     adv_group_axis = None
     simple_group_after_adv = False
     for axis, idx in enumerate(idxs):

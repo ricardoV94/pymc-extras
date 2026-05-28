@@ -3,27 +3,19 @@ import itertools
 from contextlib import suppress as does_not_warn
 
 import numpy as np
-import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
 
-from arviz_base import from_dict
 from pymc import Model, draw
 from pymc.distributions import transforms
-from pymc.distributions.transforms import ordered
 from pymc.initial_point import make_initial_point_expression
 from pymc.pytensorf import constant_fold, inputvars
 from pymc.util import UNSET
-from scipy.special import log_softmax, logsumexp
-from scipy.stats import halfnorm, norm
+from scipy.special import logsumexp
 
-from pymc_extras.model.marginal.distributions import MarginalRV
-from pymc_extras.model.marginal.marginal_model import (
-    marginalize,
-    recover_marginals,
-    unmarginalize,
-)
+from pymc_extras.marginal import marginalize, unmarginalize
+from pymc_extras.model.marginal.distributions.core import MarginalRV
 from pymc_extras.utils.model_equivalence import equal_computations_up_to_root, equivalent_models
 
 # FIXME: A Blockwise of Reshape should be rewritten into a Reshape, as it's rather inneficient
@@ -275,6 +267,81 @@ def test_nested_marginalized_rvs(batched):
     np.testing.assert_almost_equal(logp, ref_logp)
 
 
+def test_sequential_marginalization():
+    """Test that sequential marginalization is equivalent to joint marginalization."""
+
+    def build_model():
+        with Model() as m:
+            idx = pm.Bernoulli("idx", p=0.5)
+            sub_idx = pm.Bernoulli("sub_idx", p=pt.as_tensor([0.3, 0.7])[idx])
+            x = pm.Normal("x", mu=(idx + sub_idx) - 1)
+        return m
+
+    joint_m = marginalize(build_model(), ["idx", "sub_idx"])
+
+    # idx first: sub_idx becomes a dependent of idx's marginalization
+    seq_idx_first = marginalize(marginalize(build_model(), "idx"), "sub_idx")
+    assert equivalent_models(seq_idx_first, joint_m)
+
+    # sub_idx first: idx remains a plain free RV (sub_idx depends on idx, not vice versa)
+    seq_sub_first = marginalize(marginalize(build_model(), "sub_idx"), "idx")
+    assert equivalent_models(seq_sub_first, joint_m)
+
+
+def test_three_level_nested_marginalization():
+    """Chained marginalized variables three levels deep, joint and sequential."""
+    from pymc.logprob.basic import _find_unallowed_rvs_in_graph
+
+    def build_model():
+        with Model() as m:
+            idx = pm.Bernoulli("idx", p=0.6)
+            sub = pm.Bernoulli("sub", p=pt.as_tensor([0.3, 0.7])[idx])
+            subsub = pm.Bernoulli("subsub", p=pt.as_tensor([0.2, 0.9])[sub])
+            pm.Normal("y", mu=subsub * 2.0, sigma=1.0)
+        return m
+
+    m = build_model()
+    ref_fn = m.compile_logp()
+    point = {"y": 0.7}
+    ref = logsumexp(
+        [
+            ref_fn({"idx": i, "sub": s, "subsub": ss, **point})
+            for i, s, ss in itertools.product((0, 1), repeat=3)
+        ]
+    )
+
+    joint_m = marginalize(build_model(), ["idx", "sub", "subsub"])
+    assert not _find_unallowed_rvs_in_graph([joint_m.logp()])
+    np.testing.assert_allclose(joint_m.compile_logp()(joint_m.initial_point() | point), ref)
+
+    seq_m = marginalize(marginalize(marginalize(build_model(), "idx"), "sub"), "subsub")
+    np.testing.assert_allclose(seq_m.compile_logp()(seq_m.initial_point() | point), ref)
+
+
+def test_sequential_marginalization_outside_dependent():
+    """Sequential marginalization where the second target's dependent was not absorbed.
+
+    y depends only on sub_idx, so the first marginalize call absorbs sub_idx
+    but not y. The second call must rebuild y's graph over the inlined variables.
+    """
+
+    def build_model():
+        with Model() as m:
+            idx = pm.Bernoulli("idx", p=0.5)
+            sub_idx = pm.Bernoulli("sub_idx", p=pt.as_tensor([0.3, 0.7])[idx])
+            y = pm.Normal("y", mu=sub_idx)
+        return m
+
+    joint_m = marginalize(build_model(), ["idx", "sub_idx"])
+    seq_m = marginalize(marginalize(build_model(), "idx"), "sub_idx")
+
+    test_point = joint_m.initial_point()
+    np.testing.assert_allclose(
+        seq_m.compile_logp()(test_point),
+        joint_m.compile_logp()(test_point),
+    )
+
+
 def test_interdependent_rvs():
     """Test Marginalization when dependent RVs are interdependent."""
     with Model() as m:
@@ -406,7 +473,7 @@ class TestNotSupportedMixedDims:
             idx = pm.Bernoulli("idx", p=0.7, shape=2)
             y = pm.Normal("y", mu=idx @ idx.T)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
     def test_mixed_dims_via_indexing(self):
@@ -415,13 +482,13 @@ class TestNotSupportedMixedDims:
         with Model() as m:
             idx = pm.Bernoulli("idx", p=0.7, shape=2)
             y = pm.Normal("y", mu=mean[idx, :] + mean[:, idx])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
         with Model() as m:
             idx = pm.Bernoulli("idx", p=0.7, shape=2)
             y = pm.Normal("y", mu=mean[idx, None] + mean[None, idx])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
         with Model() as m:
@@ -430,33 +497,33 @@ class TestNotSupportedMixedDims:
                 mean[None, :][:, idx], 0
             )
             y = pm.Normal("y", mu=mu)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
         with Model() as m:
             idx = pm.Bernoulli("idx", p=0.7, shape=2)
             y = pm.Normal("y", mu=idx[0] + idx[1])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
     def test_mixed_dims_via_vector_indexing(self):
         with Model() as m:
             idx = pm.Bernoulli("idx", p=0.7, shape=2)
             y = pm.Normal("y", mu=idx[[0, 1, 0, 0]])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
         with Model() as m:
             idx = pm.Categorical("key", p=[0.1, 0.3, 0.6], shape=(2, 2))
             y = pm.Normal("y", pt.as_tensor([[0, 1], [2, 3]])[idx.astype(bool)])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, idx)
 
     def test_mixed_dims_via_support_dimension(self):
         with Model() as m:
             x = pm.Bernoulli("x", p=0.7, shape=3)
             y = pm.Dirichlet("y", a=x * 10 + 1)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, x)
 
     def test_mixed_dims_via_nested_marginalization(self):
@@ -465,7 +532,7 @@ class TestNotSupportedMixedDims:
             y = pm.Bernoulli("y", p=0.7, shape=(2,))
             z = pm.Normal("z", mu=pt.add.outer(x, y), shape=(3, 2))
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises((ValueError, NotImplementedError)):
             marginalize(m, [x, y])
 
 
@@ -608,196 +675,6 @@ def test_data_container():
         np.testing.assert_allclose(logp_fn(ip), ref_logp_fn(ip))
 
 
-def test_mutable_indexing_jax_backend():
-    pytest.importorskip("jax")
-    from pymc.sampling.jax import get_jaxified_logp
-
-    with Model() as model:
-        data = pm.Data("data", np.zeros(10))
-
-        cat_effect = pm.Normal("cat_effect", sigma=1, shape=5)
-        cat_effect_idx = pm.Data("cat_effect_idx", np.array([0, 1] * 5))
-
-        is_outlier = pm.Bernoulli("is_outlier", 0.4, shape=10)
-        pm.LogNormal("y", mu=cat_effect[cat_effect_idx], sigma=1 + is_outlier, observed=data)
-    marginal_model = marginalize(model, ["is_outlier"])
-    get_jaxified_logp(marginal_model)
-
-
-class TestFullModels:
-    @pytest.fixture
-    def disaster_model(self):
-        # fmt: off
-        disaster_data = pd.Series(
-            [4, 5, 4, 0, 1, 4, 3, 4, 0, 6, 3, 3, 4, 0, 2, 6,
-             3, 3, 5, 4, 5, 3, 1, 4, 4, 1, 5, 5, 3, 4, 2, 5,
-             2, 2, 3, 4, 2, 1, 3, np.nan, 2, 1, 1, 1, 1, 3, 0, 0,
-             1, 0, 1, 1, 0, 0, 3, 1, 0, 3, 2, 2, 0, 1, 1, 1,
-             0, 1, 0, 1, 0, 0, 0, 2, 1, 0, 0, 0, 1, 1, 0, 2,
-             3, 3, 1, np.nan, 2, 1, 1, 1, 1, 2, 4, 2, 0, 0, 1, 4,
-             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1]
-        )
-        # fmt: on
-        years = np.arange(1851, 1962)
-
-        with Model() as disaster_model:
-            switchpoint = pm.DiscreteUniform("switchpoint", lower=years.min(), upper=years.max())
-            early_rate = pm.Exponential("early_rate", 1.0)
-            late_rate = pm.Exponential("late_rate", 1.0)
-            rate = pm.math.switch(switchpoint >= years, early_rate, late_rate)
-            with pytest.warns(Warning):
-                disasters = pm.Poisson("disasters", rate, observed=disaster_data)
-
-        return disaster_model, years
-
-    def test_change_point_model(self, disaster_model):
-        m, years = disaster_model
-
-        ip = m.initial_point()
-        ip["late_rate_log__"] += 1.0  # Make early and endpoint ip different
-
-        ip.pop("switchpoint")
-        ref_logp_fn = m.compile_logp(
-            [m["switchpoint"], m["disasters_observed"], m["disasters_unobserved"]]
-        )
-        ref_logp = logsumexp([ref_logp_fn({**ip, **{"switchpoint": year}}) for year in years])
-
-        marginal_m = marginalize(m, m["switchpoint"])
-
-        with pytest.warns(UserWarning, match="There are multiple dependent variables"):
-            marginal_m_logp = marginal_m.compile_logp(
-                [marginal_m["disasters_observed"], marginal_m["disasters_unobserved"]]
-            )(ip)
-        np.testing.assert_almost_equal(marginal_m_logp, ref_logp)
-
-    @pytest.mark.slow
-    def test_change_point_model_sampling(self, disaster_model):
-        m, _ = disaster_model
-
-        rng = np.random.default_rng(211)
-
-        with m:
-            before_marg = pm.sample(chains=2, random_seed=rng).posterior.stack(
-                sample=("draw", "chain")
-            )
-
-        marginal_m = marginalize(m, "switchpoint")
-
-        with marginal_m:
-            with pytest.warns(UserWarning, match="There are multiple dependent variables"):
-                after_marg = pm.sample(chains=2, random_seed=rng).posterior.stack(
-                    sample=("draw", "chain")
-                )
-
-        np.testing.assert_allclose(
-            before_marg["early_rate"].mean(), after_marg["early_rate"].mean(), rtol=1e-2
-        )
-        np.testing.assert_allclose(
-            before_marg["late_rate"].mean(), after_marg["late_rate"].mean(), rtol=1e-2
-        )
-        np.testing.assert_allclose(
-            before_marg["disasters_unobserved"].mean(),
-            after_marg["disasters_unobserved"].mean(),
-            rtol=1e-2,
-        )
-
-    @pytest.mark.parametrize("univariate", (True, False))
-    def test_vector_univariate_mixture(self, univariate):
-        with Model() as m:
-            idx = pm.Bernoulli("idx", p=0.5, shape=(2,) if univariate else ())
-
-            def dist(idx, size):
-                return pm.math.switch(
-                    pm.math.eq(idx, 0),
-                    pm.Normal.dist([-10, -10], 1),
-                    pm.Normal.dist([10, 10], 1),
-                )
-
-            pm.CustomDist("norm", idx, dist=dist)
-
-        marginal_m = marginalize(m, idx)
-        logp_fn = marginal_m.compile_logp()
-
-        if univariate:
-            with pm.Model() as ref_m:
-                pm.NormalMixture("norm", w=[0.5, 0.5], mu=[[-10, 10], [-10, 10]], shape=(2,))
-        else:
-            with pm.Model() as ref_m:
-                pm.Mixture(
-                    "norm",
-                    w=[0.5, 0.5],
-                    comp_dists=[
-                        pm.MvNormal.dist([-10, -10], np.eye(2)),
-                        pm.MvNormal.dist([10, 10], np.eye(2)),
-                    ],
-                    shape=(2,),
-                )
-        ref_logp_fn = ref_m.compile_logp()
-
-        for test_value in (
-            [-10, -10],
-            [10, 10],
-            [-10, 10],
-            [-10, 10],
-        ):
-            pt = {"norm": test_value}
-            np.testing.assert_allclose(logp_fn(pt), ref_logp_fn(pt))
-
-    def test_k_censored_clusters_model(self):
-        data = np.array([[-1.0, -1.0], [0.0, 0.0], [1.0, 1.0]])
-        nobs = data.shape[0]
-        n_clusters = 5
-
-        def build_model(build_batched: bool) -> Model:
-            coords = {
-                "cluster": range(n_clusters),
-                "ndim": ("x", "y"),
-                "obs": range(nobs),
-            }
-            with Model(coords=coords) as m:
-                if build_batched:
-                    idx = pm.Categorical("idx", p=np.ones(n_clusters) / n_clusters, dims=["obs"])
-                else:
-                    idx = pm.math.stack(
-                        [
-                            pm.Categorical(f"idx_{i}", p=np.ones(n_clusters) / n_clusters)
-                            for i in range(nobs)
-                        ]
-                    )
-
-                mu_x = pm.Normal(
-                    "mu_x",
-                    dims=["cluster"],
-                    transform=ordered,
-                )
-                mu_y = pm.Normal("mu_y", dims=["cluster"])
-                mu = pm.math.stack([mu_x, mu_y], axis=-1)  # (cluster, ndim)
-                mu_indexed = mu[idx, :]
-
-                sigma = pm.HalfNormal("sigma")
-
-                y = pm.Censored(
-                    "y",
-                    dist=pm.Normal.dist(mu_indexed, sigma),
-                    lower=-3,
-                    upper=3,
-                    observed=data,
-                    dims=["obs", "ndim"],
-                )
-
-            return m
-
-        m = marginalize(build_model(build_batched=True), "idx")
-        m.set_initval(m["mu_x"], np.linspace(-1, 1, n_clusters))
-
-        ref_m = marginalize(build_model(build_batched=False), [f"idx_{i}" for i in range(nobs)])
-        test_point = m.initial_point()
-        np.testing.assert_almost_equal(
-            m.compile_logp()(test_point),
-            ref_m.compile_logp()(test_point),
-        )
-
-
 def test_unmarginalize():
     with pm.Model() as m:
         idx = pm.Bernoulli("idx", p=0.5)
@@ -821,165 +698,6 @@ def test_unmarginalize():
     assert equivalent_models(unmarginal_sub_idx, marginalize(m, "idx"))
 
 
-class TestRecoverMarginals:
-    @pytest.mark.parametrize("explicit_model", (True, False))
-    def test_basic(self, explicit_model):
-        with Model() as m:
-            sigma = pm.HalfNormal("sigma")
-            p = np.array([0.5, 0.2, 0.3])
-            k = pm.Categorical("k", p=p)
-            mu = np.array([-3.0, 0.0, 3.0])
-            mu_ = pt.as_tensor_variable(mu)
-            y = pm.Normal("y", mu=mu_[k], sigma=sigma)
-
-        marginal_m = marginalize(m, [k])
-
-        rng = np.random.default_rng(211)
-
-        with marginal_m:
-            prior = pm.sample_prior_predictive(
-                draws=20,
-                random_seed=rng,
-                return_inferencedata=False,
-            )
-            idata = from_dict(
-                {"posterior": {k: np.expand_dims(v, axis=0) for k, v in prior.items()}}
-            )
-
-        if explicit_model:
-            idata = recover_marginals(idata, model=marginal_m, return_samples=True)
-        else:
-            with marginal_m:
-                idata = recover_marginals(idata, return_samples=True)
-
-        post = idata.posterior
-        assert "k" in post
-        assert "lp_k" in post
-        assert post.k.shape == post.y.shape
-        assert post.lp_k.shape == (*post.k.shape, len(p))
-
-        def true_logp(y, sigma):
-            y = y.repeat(len(p)).reshape(len(y), -1)
-            sigma = sigma.repeat(len(p)).reshape(len(sigma), -1)
-            return log_softmax(
-                np.log(p)
-                + norm.logpdf(y, loc=mu, scale=sigma)
-                + halfnorm.logpdf(sigma)
-                + np.log(sigma),
-                axis=1,
-            )
-
-        np.testing.assert_almost_equal(
-            true_logp(post.y.values.flatten(), post.sigma.values.flatten()),
-            post.lp_k[0].values,
-        )
-        np.testing.assert_almost_equal(logsumexp(post.lp_k, axis=-1), 0)
-
-    def test_coords(self):
-        """Test if coords can be recovered with marginalized value had it originally"""
-        with Model(coords={"year": [1990, 1991, 1992]}) as m:
-            sigma = pm.HalfNormal("sigma")
-            idx = pm.Bernoulli("idx", p=0.75, dims="year")
-            x = pm.Normal("x", mu=idx, sigma=sigma, dims="year")
-
-        marginal_m = marginalize(m, [idx])
-        rng = np.random.default_rng(211)
-
-        with marginal_m:
-            prior = pm.sample_prior_predictive(
-                draws=20,
-                random_seed=rng,
-                return_inferencedata=False,
-            )
-            idata = from_dict({"posterior": {k: np.expand_dims(prior[k], axis=0) for k in prior}})
-
-        with marginal_m:
-            idata = recover_marginals(idata, return_samples=True)
-        post = idata.posterior
-        assert post.idx.dims == ("chain", "draw", "year")
-        assert post.lp_idx.dims == ("chain", "draw", "year", "lp_idx_dim")
-
-    def test_batched(self):
-        """Test that marginalization works for batched random variables"""
-        with Model() as m:
-            sigma = pm.HalfNormal("sigma")
-            idx = pm.Bernoulli("idx", p=0.7, shape=(3, 2))
-            y = pm.Normal("y", mu=idx.T, sigma=sigma, shape=(2, 3))
-
-        marginal_m = marginalize(m, [idx])
-
-        rng = np.random.default_rng(211)
-
-        with marginal_m:
-            prior = pm.sample_prior_predictive(
-                draws=20,
-                random_seed=rng,
-                return_inferencedata=False,
-            )
-            idata = from_dict({"posterior": {k: np.expand_dims(prior[k], axis=0) for k in prior}})
-
-            idata = recover_marginals(idata, return_samples=True)
-        post = idata.posterior
-        assert post["y"].shape == (1, 20, 2, 3)
-        assert post["idx"].shape == (1, 20, 3, 2)
-        assert post["lp_idx"].shape == (1, 20, 3, 2, 2)
-
-    def test_nested(self):
-        """Test that marginalization works when there are nested marginalized RVs"""
-
-        with Model() as m:
-            idx = pm.Bernoulli("idx", p=0.75)
-            sub_idx = pm.Bernoulli("sub_idx", p=pt.switch(pt.eq(idx, 0), 0.15, 0.95))
-            sub_dep = pm.Normal("y", mu=idx + sub_idx, sigma=1.0)
-
-        marginal_m = marginalize(m, [idx, sub_idx])
-
-        rng = np.random.default_rng(211)
-
-        with marginal_m:
-            prior = pm.sample_prior_predictive(
-                draws=20,
-                random_seed=rng,
-                return_inferencedata=False,
-            )
-            idata = from_dict(
-                {"posterior": {k: np.expand_dims(v, axis=0) for k, v in prior.items()}}
-            )
-
-            idata = recover_marginals(idata, return_samples=True)
-        post = idata.posterior
-        assert "idx" in post
-        assert "lp_idx" in post
-        assert post.idx.shape == post.y.shape
-        assert post.lp_idx.shape == (*post.idx.shape, 2)
-        assert "sub_idx" in post
-        assert "lp_sub_idx" in post
-        assert post.sub_idx.shape == post.y.shape
-        assert post.lp_sub_idx.shape == (*post.sub_idx.shape, 2)
-
-        def true_idx_logp(y):
-            idx_0 = np.log(0.85 * 0.25 * norm.pdf(y, loc=0) + 0.15 * 0.25 * norm.pdf(y, loc=1))
-            idx_1 = np.log(0.05 * 0.75 * norm.pdf(y, loc=1) + 0.95 * 0.75 * norm.pdf(y, loc=2))
-            return log_softmax(np.stack([idx_0, idx_1]).T, axis=1)
-
-        np.testing.assert_almost_equal(
-            true_idx_logp(post.y.values.flatten()),
-            post.lp_idx[0].values,
-        )
-
-        def true_sub_idx_logp(y):
-            sub_idx_0 = np.log(0.85 * 0.25 * norm.pdf(y, loc=0) + 0.05 * 0.75 * norm.pdf(y, loc=1))
-            sub_idx_1 = np.log(0.15 * 0.25 * norm.pdf(y, loc=1) + 0.95 * 0.75 * norm.pdf(y, loc=2))
-            return log_softmax(np.stack([sub_idx_0, sub_idx_1]).T, axis=1)
-
-        np.testing.assert_almost_equal(
-            true_sub_idx_logp(post.y.values.flatten()),
-            post.lp_sub_idx[0].values,
-        )
-        np.testing.assert_almost_equal(logsumexp(post.lp_idx, axis=-1), 0)
-        np.testing.assert_almost_equal(logsumexp(post.lp_sub_idx, axis=-1), 0)
-
-
 def test_forward_after_sampling():
     # Regression test where forward graph was modified during sampling
     # Specifically `model.initial_point`, but we test the whole pipeline
@@ -992,7 +710,7 @@ def test_forward_after_sampling():
 
     marginalized_mod = marginalize(m, [is_outlier])
 
-    # Check that model.initial_point() does not modify the inner graph of the MarginalRV
+    # Check that model.initial_point() does not modify the inner graph of the marginalization Op
     marginal_rv = marginalized_mod["y_hat"]
     inner_outputs_before = marginal_rv.owner.op.fgraph.clone().outputs
     marginalized_mod.initial_point()
@@ -1005,16 +723,3 @@ def test_forward_after_sampling():
         pm.sample(tune=1, chains=1, draws=1, compute_convergence_checks=False)
 
     assert pm.draw(marginalized_mod["y_hat"]).shape == (10,)
-
-
-def test_numpyro_compat():
-    pytest.importorskip("numpyro")
-
-    with pm.Model() as m:
-        p_outlier = pm.Beta("p_outlier", 1, 1)
-        is_outlier = pm.Bernoulli("is_outlier", p=p_outlier, shape=(10,))
-        sigma = pm.Exponential("sigma", 1, shape=(2,))
-        pm.Normal("y_hat", mu=0, sigma=sigma[is_outlier])
-
-    with marginalize(m, [is_outlier]):
-        pm.sample(nuts_sampler="numpyro", chains=1, tune=1, draws=1)

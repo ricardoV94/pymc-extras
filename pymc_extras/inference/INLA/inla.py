@@ -5,7 +5,7 @@ import pymc as pm
 from pytensor.tensor import TensorLike, TensorVariable, as_tensor
 from xarray import DataTree
 
-from pymc_extras.model.marginal.marginal_model import marginalize
+from pymc_extras.model.marginal.marginalize import marginalize
 
 
 def fit_INLA(
@@ -35,7 +35,8 @@ def fit_INLA(
     Q: TensorLike
         Precision matrix of the latent field.
     minimizer_seed: int
-        Seed for random initialisation of the minimum point x*.
+        Seed for random initialisation of the minimum point x*. Currently
+        unused — the initialization is deterministic.
     model: pm.Model
         PyMC model.
     minimizer_kwargs:
@@ -92,12 +93,11 @@ def fit_INLA(
     model = pm.modelcontext(model)
 
     # Marginalize out the latent field
-    marginalize_kwargs = {
-        "Q": as_tensor(Q),
-        "minimizer_seed": minimizer_seed,
-        "minimizer_kwargs": minimizer_kwargs,
-    }
-    marginal_model = marginalize(model, x, use_laplace=True, **marginalize_kwargs)
+    marginal_model = marginalize(
+        model,
+        laplace_approx={x: as_tensor(Q)},
+        minimizer_kwargs=minimizer_kwargs,
+    )
 
     # Sample over the hyperparameters
     if not return_latent_posteriors:

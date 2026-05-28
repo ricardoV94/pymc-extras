@@ -20,8 +20,9 @@ def test_marginalized_bernoulli_logp():
     marginal_rv_node = MarginalFiniteDiscreteRV(
         [mu],
         [idx, y],
+        n_dependent_rvs=1,
         dims_connections=(((),),),
-        dims=(),
+        marginalized_dims=(),
     )(mu)[0].owner
 
     y_vv = y.clone()

@@ -13,8 +13,19 @@ methods in the current release of PyMC experimental.
 
    as_model
    marginalize
-   recover_marginals
    model_builder.ModelBuilder
+
+Marginalization
+===============
+
+.. currentmodule:: pymc_extras.marginal
+.. autosummary::
+   :toctree: generated/
+
+   marginalize
+   conditional
+   unmarginalize
+   recover
 
 Inference
 =========

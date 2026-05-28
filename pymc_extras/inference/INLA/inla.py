@@ -5,7 +5,7 @@ import pymc as pm
 from pytensor.tensor import TensorLike, TensorVariable, as_tensor
 from xarray import DataTree
 
-from pymc_extras.model.marginal.marginal_model import marginalize
+from pymc_extras.model.marginal.model import marginalize
 
 
 def fit_INLA(

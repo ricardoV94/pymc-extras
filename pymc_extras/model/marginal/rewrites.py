@@ -1,11 +1,11 @@
-from pymc.distributions import Bernoulli, Categorical, DiscreteUniform
+from pymc.distributions import Bernoulli, Categorical, DiscreteUniform, Normal
 from pymc.model.fgraph import model_free_rv
 from pymc.pytensorf import collect_default_updates
 from pytensor.compile import SharedVariable
 from pytensor.graph import Apply, Op, node_rewriter
 from pytensor.graph.replace import graph_replace
 from pytensor.graph.rewriting.db import EquilibriumDB
-from pytensor.graph.traversal import graph_inputs
+from pytensor.graph.traversal import ancestors, graph_inputs
 
 from pymc_extras.distributions.timeseries import DiscreteMarkovChain
 from pymc_extras.model.marginal.distributions.core import MarginalRV, inline_ofg_outputs
@@ -14,6 +14,7 @@ from pymc_extras.model.marginal.distributions.enumerable import (
     MarginalFiniteDiscreteRV,
 )
 from pymc_extras.model.marginal.distributions.laplace import MarginalLaplaceRV
+from pymc_extras.model.marginal.distributions.normal import NormalNormalMarginalRV
 from pymc_extras.model.marginal.graph_analysis import subgraph_batch_dim_connection
 
 
@@ -227,6 +228,56 @@ def laplace_marginal(fgraph, node):
 
 
 marginal_rewrites_db.register("laplace_marginal", laplace_marginal, "basic")
+
+
+@node_rewriter(tracks=[MarginalSubgraph])
+def normal_normal_marginal_rewrite(fgraph, node):
+    op = node.op
+
+    if op.n_dependent_rvs != 1:
+        return None
+
+    inputs, outputs = extract_marginal_subgraph(node)
+    marginalized_rv = outputs[0]
+    dependent_rv = outputs[1]
+
+    if not (
+        isinstance(marginalized_rv.owner.op, Normal) and isinstance(dependent_rv.owner.op, Normal)
+    ):
+        return None
+
+    mu_dep, sigma_dep = dependent_rv.owner.op.dist_params(dependent_rv.owner)
+
+    if marginalized_rv in ancestors([sigma_dep]):
+        return None
+
+    if mu_dep is not marginalized_rv:
+        match mu_dep.owner_op_and_inputs:
+            case (_, a, b):
+                if a is marginalized_rv:
+                    if marginalized_rv in ancestors([b]):
+                        return None
+                elif b is marginalized_rv:
+                    if marginalized_rv in ancestors([a]):
+                        return None
+                else:
+                    return None
+            case _:
+                return None
+
+    typed_op = NormalNormalMarginalRV(
+        inputs=inputs,
+        outputs=outputs,
+        marginalized_dims=op.marginalized_dims,
+    )
+
+    new_outputs = typed_op(*inputs)
+    if not isinstance(new_outputs, list):
+        new_outputs = list(new_outputs)
+    return new_outputs[: len(node.outputs)]
+
+
+marginal_rewrites_db.register("normal_normal_marginal", normal_normal_marginal_rewrite, "basic")
 
 
 @node_rewriter(tracks=[MarginalSubgraph])

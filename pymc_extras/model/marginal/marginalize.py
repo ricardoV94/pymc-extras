@@ -294,7 +294,8 @@ def marginalize(
 
     Marginalization is resolved via logprob rewrites. The supported cases
     include finite discrete variables (Bernoulli, Categorical,
-    DiscreteUniform, DiscreteMarkovChain).
+    DiscreteUniform, DiscreteMarkovChain) and closed-form conjugate pairs
+    such as Normal-Normal.
 
     For finite discrete marginalization with batched dimensions, any
     conditionally dependent variables must use information from an individual

@@ -64,9 +64,9 @@ def marginalized_conditional(op, inputs, dep_rvs):
     variable and then the dependents given it, factoring as
     ``p(marginalized | inputs) * p(dependents | marginalized, inputs)``.
     This function returns the reverse factor
-    ``p(marginalized | dependents, inputs)``: e.g. a Categorical over the
+    ``p(marginalized | dependents, inputs)``: a Categorical over the
     enumerated domain weighted by the joint logp for finite discrete
-    marginals.
+    marginals, the conjugate posterior Normal for Normal-Normal.
 
     Parameters
     ----------

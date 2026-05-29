@@ -39,6 +39,14 @@ def compute_conditional_logprob(cond_model, var_name, domain, point):
     return np.array([logp_fn({**point, var_name: k}) for k in domain])
 
 
+def build_normal_chain_model():
+    with pm.Model() as m:
+        mu = pm.Normal("mu", 0, 10)
+        x = pm.Normal("x", mu=mu, sigma=3.0)
+        pm.Normal("y", mu=x + 1.5, sigma=4.0)
+    return m
+
+
 def build_bernoulli_model():
     with pm.Model() as m:
         idx = pm.Bernoulli("idx", p=0.75)
@@ -243,6 +251,12 @@ def test_sample_posterior_predictive_single():
     "build_model, marginalized_name, point",
     [
         pytest.param(
+            build_normal_chain_model,
+            "x",
+            {"mu": 1.0, "x": 3.0, "y": 10.0},
+            id="normal-normal",
+        ),
+        pytest.param(
             build_bernoulli_model,
             "idx",
             {"idx": 1, "y": 1.0},
@@ -251,7 +265,13 @@ def test_sample_posterior_predictive_single():
     ],
 )
 def test_roundtrip_preserves_joint_logp(build_model, marginalized_name, point):
-    """marginalize() + conditional() re-factor the model but preserve the joint density."""
+    """marginalize() + conditional() re-factor the model but preserve the joint density.
+
+    E.g. the normal chain factors as p(mu)*p(x|mu)*p(y|x); the conditional
+    model factors it as p(mu)*p(y|mu)*p(x|y,mu) (y stays marginalized over
+    x, x recovered).
+    Both describe the same joint p(mu, x, y), so their total logp must match.
+    """
     m = build_model()
     cond_m = conditional(marginalize(m, marginalized_name))
     np.testing.assert_allclose(

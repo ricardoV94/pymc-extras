@@ -180,7 +180,7 @@ def local_unmarginalize(fgraph, node):
 
 marginal_rewrites_db = EquilibriumDB()
 marginal_rewrites_db.name = "marginal_rewrites_db"
-# The strategy-specific rewrites (finite discrete, Laplace)
+# The strategy-specific rewrites (finite discrete, Laplace, Normal-Normal)
 # live next to their MarginalRV subclasses in ``distributions/`` and register
 # themselves here on import.
 

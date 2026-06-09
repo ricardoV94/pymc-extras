@@ -38,7 +38,7 @@ dependencies = [
   "arviz>=1.1",
   "better-optimize>=0.4.2,<1.0",
   "pydantic>=2.0.0",
-  "preliz>=0.25.0",
+  "preliz>=0.26.0,<0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -102,17 +102,8 @@ filterwarnings =[
     # JAX issues an over-eager warning if os.fork() is called when the JAX module is loaded, even if JAX isn't being used
     'ignore:os\.fork\(\) was called\.:RuntimeWarning',
 
-    # Preliz needs to update for pytensor > 2.35
-    'ignore:.*`pytensor\.graph\.basic\.ancestors`.*`pytensor\.graph\.traversal\.ancestors`.*:FutureWarning:^preliz(\.$)',
-
-    # Preliz triggers pytensor broadcastable deprecation internally
-    'ignore:The `broadcastable` keyword is deprecated:DeprecationWarning:pytensor',
-
     # OpenMP library warning on windows CI
     'ignore::RuntimeWarning:threadpoolctl',
-
-    # ArviZ warning related to 1.0 release
-    'ignore:\nArviZ is undergoing a major refactor.*:FutureWarning',
 
     # Numba warnings that are filtered by PyTensor but re-introduced by pytest
     'ignore::numba.core.errors.NumbaPerformanceWarning',

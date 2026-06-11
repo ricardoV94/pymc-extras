@@ -14,6 +14,7 @@
 
 from pymc_extras.inference.dadvi.dadvi import fit_dadvi
 from pymc_extras.inference.fit import fit
+from pymc_extras.inference.INLA.inla import fit_INLA
 from pymc_extras.inference.laplace_approx.find_map import find_MAP
 from pymc_extras.inference.laplace_approx.laplace import fit_laplace
 from pymc_extras.inference.pathfinder.pathfinder import fit_blackjax_pathfinder, fit_pathfinder
@@ -25,4 +26,5 @@ __all__ = [
     "fit_laplace",
     "fit_pathfinder",
     "fit_dadvi",
+    "fit_INLA",
 ]

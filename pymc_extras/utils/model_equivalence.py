@@ -64,6 +64,10 @@ def equivalent_models(model1: Model, model2: Model, *, strict_dtype: bool = True
     """
     fgraph1, _ = fgraph_from_model(model1)
     fgraph2, _ = fgraph_from_model(model2)
-    return equal_computations_up_to_root(
-        fgraph1.outputs, fgraph2.outputs, strict_dtype=strict_dtype
-    )
+    # Model variable order is incidental (it follows graph construction
+    # history); model variables are uniquely named, so compare by name.
+    outputs1 = sorted(fgraph1.outputs, key=lambda var: var.name)
+    outputs2 = sorted(fgraph2.outputs, key=lambda var: var.name)
+    if [var.name for var in outputs1] != [var.name for var in outputs2]:
+        return False
+    return equal_computations_up_to_root(outputs1, outputs2, strict_dtype=strict_dtype)

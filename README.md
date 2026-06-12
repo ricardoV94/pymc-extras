@@ -10,52 +10,57 @@
   alt="Codecov Badge"
 />
 
-As PyMC continues to mature and expand its functionality to accommodate more domains of application, we increasingly see cutting-edge methodologies, highly specialized statistical distributions, and complex models appear.
-While this adds to the functionality and relevance of the project, it can also introduce instability and impose a burden on testing and quality control.
-To reduce the burden on the main `pymc` repository, this `pymc-extras` repository can become the aggregator and testing ground for new additions to PyMC.
-This may include unusual probability distributions, advanced model fitting algorithms, innovative yet not fully tested methods, or niche functionality that might not fit in the main PyMC repository, but still may be of interest to users.
+PyMC Extras extends [PyMC](https://www.pymc.io) with additional distributions, inference methods, and model transformations.
+It is maintained by the PyMC team and hosts functionality that is too specialized for the core library, but useful enough that you shouldn't have to write it yourself.
 
-The `pymc-extras` repository can be understood as the first step in the PyMC development pipeline, where all novel code is introduced until it is obvious that it belongs in the main repository.
-We hope that this organization improves the stability and streamlines the testing overhead of the `pymc` repository, while allowing users and developers to test and evaluate cutting-edge methods and not yet fully mature features.
+Highlights include:
 
-`pymc-extras` would be designed to mirror the namespaces in `pymc` to make usage and migration as easy as possible.
-For example, a `ParabolicFractal` distribution could be used analogously to those in `pymc`:
+- Automatic marginalization: exact for finite discrete and conjugate variables, approximate via the Laplace approximation
+- Alternative inference methods: Pathfinder, DADVI, INLA, Laplace approximation, and better MAP estimation
+- Statespace models: SARIMAX, VARMAX, ETS, and structural time series with Kalman filtering
+- Additional distributions such as `DiscreteMarkovChain`, `GeneralizedPoisson`, and `GenExtreme`
+
+`pymc-extras` mirrors the namespaces in `pymc` to make usage and migration as easy as possible.
+For example, distributions are used exactly like those in `pymc`:
 
 ```python
 import pymc as pm
 import pymc_extras as pmx
 
 with pm.Model():
-  alpha = pmx.ParabolicFractal('alpha', b=1, c=1)
+    xi = pm.HalfNormal("xi", 0.2)
+    pmx.GenExtreme("llik", mu=1, sigma=0.5, xi=xi, observed=data)
+```
 
-  ...
+See the [documentation](https://pymc-extras.readthedocs.io/) for the full API reference.
 
+## Installation
+
+```bash
+pip install pymc-extras
+```
+
+or for the development version:
+
+```bash
+pip install git+https://github.com/pymc-devs/pymc-extras.git
 ```
 
 ## Questions
 
 ### What belongs in `pymc-extras`?
 
-- newly-implemented statistical methods, for example step methods or model construction helpers
+- statistical methods, for example step methods or model construction helpers
 - distributions that are tricky to sample from or test
-- infrequently-used fitting methods or distributions
+- specialized fitting methods or distributions
 - any code that requires additional optimization before it can be used in practice
 
+Functionality that proves widely useful may graduate to the main `pymc` repository.
 
 ### What does not belong in `pymc-extras`?
 - Case studies
 - Implementations that cannot be applied generically, for example because they are tied to variables from a toy example
 
+## Contributing
 
-### Should there be more than one add-on repository?
-
-Since there is a lot of code that we may not want in the main repository, does it make sense to have more than one additional repository?
-For example, `pymc-extras` may just include methods that are not fully developed, tested and trusted, while code that is known to work well and has adequate test coverage, but is still too specialized to become part of `pymc` could reside in a `pymc-extras` (or similar) repository.
-
-
-### Unanswered questions & ToDos
-This project is still young and many things have not been answered or implemented.
-Please get involved!
-
-* What are guidelines for organizing submodules?
-  * Proposal: No default imports of WIP/unstable submodules. By importing manually we can avoid breaking the package if a submodule breaks, for example because of an updated dependency.
+We welcome contributions! Check out the [contributing guidelines](https://github.com/pymc-devs/pymc-extras/blob/main/CONTRIBUTING.md) to get started.

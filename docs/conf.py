@@ -56,6 +56,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinx.ext.mathjax",
+    "sphinx.ext.intersphinx",
     "nbsphinx",
     "matplotlib.sphinxext.plot_directive",
 ]
@@ -214,3 +215,19 @@ epub_exclude_files = ["search.html"]
 
 # -- Extension configuration -------------------------------------------------
 # https://svn.python.org/projects/external/Jinja-1.1/docs/build/designerdoc.html
+
+# Docstring plots use the "arviz-darkgrid" style, registered on arviz import.
+# arviz >= 1.0 renamed its styles, so alias it when missing.
+plot_pre_code = """
+import arviz
+import matplotlib.style
+if "arviz-darkgrid" not in matplotlib.style.available:
+    matplotlib.style.library["arviz-darkgrid"] = matplotlib.style.library["arviz-variat"]
+    matplotlib.style.available.append("arviz-darkgrid")
+"""
+
+intersphinx_mapping = {
+    "pymc": ("https://www.pymc.io/projects/docs/en/stable/", None),
+    "pytensor": ("https://pytensor.readthedocs.io/en/latest/", None),
+    "arviz": ("https://python.arviz.org/en/stable/", None),
+}

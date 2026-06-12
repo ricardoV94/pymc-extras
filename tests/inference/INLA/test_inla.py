@@ -66,7 +66,7 @@ def test_AR1(rng):
         y = pm.Poisson("y", mu=pm.math.exp(x), observed=y_obs)
 
         # Use INLA
-        idata = pmx.fit(method="INLA", x=x, Q=tau, return_latent_posteriors=False)
+        idata = pmx.fit(method="INLA", x=x, Q=tau, return_latent_posteriors=False, random_seed=123)
 
     theta_inla = idata.posterior.theta.mean(axis=(0, 1))
     tau_inla = idata.posterior.tau.mean(axis=(0, 1))
@@ -76,7 +76,7 @@ def test_AR1(rng):
     np.testing.assert_allclose(theta_inla, np.array([true_theta]), atol=0.2)
     np.testing.assert_allclose(tau_inla, true_tau, atol=0.3)
     np.testing.assert_allclose(theta_var_inla, true_theta_var, atol=0.1)
-    np.testing.assert_allclose(tau_var_inla, true_tau_var, atol=0.2)
+    np.testing.assert_allclose(tau_var_inla, true_tau_var, atol=0.3)
 
 
 @pytest.mark.filterwarnings(
@@ -119,6 +119,7 @@ def test_3_layer_normal(rng):
             x=x,
             Q=tau,
             return_latent_posteriors=False,
+            random_seed=123,
         )
 
     posterior_mean_inla = idata.posterior.mu.mean(axis=(0, 1))

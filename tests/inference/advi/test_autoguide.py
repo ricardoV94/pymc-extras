@@ -6,6 +6,8 @@ from pytensor import function as pytensor_function
 from scipy import special
 
 from pymc_extras.inference.advi.autoguide import AutoDiagonalNormal, AutoGuideModel
+from pymc_extras.inference.advi.compile import compile_sampling_fn
+from pymc_extras.inference.advi.objective import get_logp_logq
 
 # TODO: This is a magic number from AutoDiagonalNormal's scale initialization
 SCALE_INIT = 0.1
@@ -74,6 +76,61 @@ class TestAutoDiagonalNormal:
 
         assert tuple(guide.model.coords["city"]) == tuple(coords["city"])
         assert guide.model.named_vars_to_dims["mu"] == ("city",)
+
+
+class TestTransformedRVs:
+    def test_shape_changing_transform(self):
+        # https://github.com/pymc-devs/pymc-extras/issues/646
+        with pm.Model() as model:
+            p = pm.Dirichlet("p", np.ones(3))
+            pm.Categorical("obs", p=p, observed=[0, 1, 2])
+
+        guide = AutoDiagonalNormal(model)
+
+        # The guide parameterizes the simplex-transformed value variable, of size n - 1
+        param_shapes = {p.name: v.shape for p, v in guide.params_init_values.items()}
+        assert param_shapes["p_loc"] == (2,)
+        assert param_shapes["p_scale"] == (2,)
+
+        logp, logq = get_logp_logq(model, guide)
+        f = pytensor_function(list(guide.params), [logp, logq])
+        res = f(*[guide.params_init_values[p] for p in guide.params])
+        assert np.all(np.isfinite(res))
+
+    def test_elemwise_transform_preserves_dims(self):
+        coords = {"city": ["A", "B", "C"]}
+        with pm.Model(coords=coords) as model:
+            pm.Exponential("sigma", 1, dims="city")
+
+        guide = AutoDiagonalNormal(model)
+
+        assert guide.model.named_vars_to_dims["sigma"] == ("city",)
+
+    def test_shape_changing_transform_drops_dims(self):
+        coords = {"cat": ["a", "b", "c"]}
+        with pm.Model(coords=coords) as model:
+            pm.Dirichlet("p", np.ones(3), dims="cat")
+
+        guide = AutoDiagonalNormal(model)
+
+        assert "p" not in guide.model.named_vars_to_dims
+
+    def test_sampling_fn_maps_to_constrained_space(self):
+        with pm.Model() as model:
+            pm.Uniform("u", lower=-1, upper=3, shape=(2,))
+            pm.Dirichlet("p", np.ones(3))
+
+        guide = AutoDiagonalNormal(model)
+        draws = 100
+        f_sample = compile_sampling_fn(model, guide, draws=draws)
+
+        u_draws, p_draws = f_sample(*[guide.params_init_values[p] for p in guide.params])
+
+        assert u_draws.shape == (draws, 2)
+        assert p_draws.shape == (draws, 3)
+        assert np.all((u_draws > -1) & (u_draws < 3))
+        assert np.all(p_draws >= 0)
+        np.testing.assert_allclose(p_draws.sum(axis=-1), 1.0)
 
 
 class TestAutoGuideModel:

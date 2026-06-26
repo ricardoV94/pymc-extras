@@ -6,6 +6,7 @@ from pymc.variational.minibatch_rv import create_minibatch_rv
 from pytensor.tensor.type_other import NoneTypeT
 
 from pymc_extras.model.marginal.graph_analysis import (
+    _subgraph_batch_dim_connection,
     is_conditional_dependent,
     subgraph_batch_dim_connection,
 )
@@ -47,6 +48,25 @@ class TestSubgraphBatchDimConnection:
         invalid_out = pt.sum(inp, axis=(1,))
         with pytest.raises(ValueError, match="Use of known dimensions"):
             subgraph_batch_dim_connection(inp, [invalid_out])
+
+        # Reducing the *leading* tracked dim (label 0) must also raise
+        invalid_leading = pt.sum(inp, axis=(0,))
+        with pytest.raises(ValueError, match="reduced dimensions"):
+            subgraph_batch_dim_connection(inp, [invalid_leading])
+
+    def test_matmul(self):
+        # matmul: the non-contracted (m, p) dims map 1:1 to the output, the contracted
+        # dim mixes. Track only the leading dim of a (obs, feature) matrix through
+        # ``beta @ x.T`` (feature is contracted) -- obs reaches the output.
+        x = pt.matrix("x", shape=(4, 3))
+        beta = pt.vector("beta", shape=(3,))
+        out = beta @ x.T
+        conn = _subgraph_batch_dim_connection({x: (0, None)}, [x], [out])
+        assert conn[out] == (0,)
+
+        # Tracking the contracted dimension instead raises
+        with pytest.raises(ValueError, match="contracted dimensions"):
+            _subgraph_batch_dim_connection({x: (None, 0)}, [x], [out])
 
     def test_subtensor(self):
         inp = pt.tensor(shape=(4, 3, 2))

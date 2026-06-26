@@ -11,6 +11,7 @@ from pytensor.graph.traversal import ancestors, io_toposort
 from pytensor.tensor import TensorType, TensorVariable
 from pytensor.tensor.blockwise import Blockwise
 from pytensor.tensor.elemwise import CAReduce, DimShuffle, Elemwise
+from pytensor.tensor.math import Dot
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.shape import Shape
 from pytensor.tensor.subtensor import AdvancedSubtensor, Subtensor, get_idx_list
@@ -186,6 +187,22 @@ def _subgraph_batch_dim_connection(var_dims: VAR_DIMS, input_vars, output_vars) 
                         raise ValueError(f"Known dim corresponds to core dimension of {node.op}")
                     var_dims[out] = out_dims
 
+        elif isinstance(node.op, Blockwise) and isinstance(node.op.core_op, Dot):
+            # matmul: (..., m, k) @ (..., k, p) -> (..., m, p). Each output entry is
+            # ``sum_k A[..., m, k] * B[..., k, p]``, so the ``m`` and ``p`` dims are
+            # unmixed (a known dim there maps 1:1 to an output dim), while the
+            # contracted ``k`` dim mixes information and is a chokepoint.
+            a_dims, b_dims = inputs_dims
+            a_batch, (a_m, a_k) = a_dims[:-2], a_dims[-2:]
+            b_batch, (b_k, b_p) = b_dims[:-2], b_dims[-2:]
+            if a_k is not None or b_k is not None:
+                raise ValueError(
+                    f"Use of known dimensions as contracted dimensions of op {node.op} "
+                    "not supported."
+                )
+            batch_dims = _broadcast_dims((a_batch, b_batch))
+            var_dims[node.outputs[0]] = (*batch_dims, a_m, b_p)
+
         elif isinstance(node.op, Elemwise | Blockwise | RandomVariable | SymbolicRandomVariable):
             # NOTE: User-provided CustomDist may not respect core dimensions on the left.
 
@@ -229,7 +246,7 @@ def _subgraph_batch_dim_connection(var_dims: VAR_DIMS, input_vars, output_vars) 
             elif axes is None:
                 axes = tuple(range(node.inputs[0].type.ndim))
 
-            if any(input_dims[axis] for axis in axes):
+            if any(input_dims[axis] is not None for axis in axes):
                 raise ValueError(
                     f"Use of known dimensions as reduced dimensions of op {node.op} not supported."
                 )

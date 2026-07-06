@@ -1,9 +1,10 @@
 from pymc.model.fgraph import ModelValuedVar, model_free_rv
 from pymc.pytensorf import collect_default_updates
 from pytensor.compile import SharedVariable
+from pytensor.compile.mode import optdb
 from pytensor.graph import Apply, Op, node_rewriter
 from pytensor.graph.replace import graph_replace
-from pytensor.graph.rewriting.db import EquilibriumDB
+from pytensor.graph.rewriting.db import EquilibriumDB, SequenceDB
 from pytensor.graph.traversal import ancestors, graph_inputs
 
 from pymc_extras.model.marginal.distributions.core import MarginalRV, inline_ofg_outputs
@@ -193,6 +194,25 @@ marginal_rewrites_db.name = "marginal_rewrites_db"
 # The strategy-specific rewrites (finite discrete, Laplace, Normal-Normal)
 # live next to their MarginalRV subclasses in ``distributions/`` and register
 # themselves here on import.
+
+# Canonicalize the marker subgraphs (flattening Add/Mul, folding constants, ...)
+# before resolving them, mirroring pymc.logprob's pre-canonicalize -> IR sequence.
+# The structure detectors (e.g. affine_coefficients) can then assume canonical
+# graphs instead of re-implementing canonicalization.
+marginalize_rewrites_db = SequenceDB()
+marginalize_rewrites_db.name = "marginalize_rewrites_db"
+marginalize_rewrites_db.register(
+    "pre-canonicalize",
+    optdb.query("+canonicalize", "-local_eager_useless_unbatched_blockwise"),
+    "basic",
+    position=1,
+)
+marginalize_rewrites_db.register(
+    "marginal_ir_rewrites",
+    marginal_rewrites_db,
+    "basic",
+    position=2,
+)
 
 
 @node_rewriter(tracks=[MarginalSubgraph, LaplaceMarginalSubgraph])

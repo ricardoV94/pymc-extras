@@ -136,9 +136,12 @@ def reduce_batch_dependent_logps(
             # Some may have already been reduced by the logp expression of the dependent RV (e.g., multivariate RVs)
             dep_supp_axes = get_support_axes(dependent_op)[0]
 
-            # Dependent RV support axes are already collapsed in the logp, so we ignore them
+            # Dependent RV support axes are already collapsed in the logp, so we ignore them.
+            # The axes that remain must also be renumbered: they are counted against the
+            # dependent RV, but the logp no longer has the collapsed ones, so each support axis
+            # to the right of an axis shifts it one step towards zero.
             supp_axes = [
-                -i
+                -(i - sum(1 for supp_axis in dep_supp_axes if supp_axis > -i))
                 for i, dim in enumerate(reversed(dependent_dims_connection), start=1)
                 if (dim is None and -i not in dep_supp_axes)
             ]

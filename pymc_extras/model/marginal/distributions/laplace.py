@@ -142,7 +142,7 @@ def laplace_marginal_rv_logp(op: MarginalLaplaceRV, values, *inputs_and_Q, **kwa
     inner_rvs = list(all_outputs[1 : 1 + op.n_dependent_rvs])
 
     # Obtain the joint_logp graph of the inner RV graph
-    inner_rv_values = dict(zip(inner_rvs, values))
+    inner_rv_values = dict(zip(inner_rvs, values, strict=True))
 
     marginalized_vv = x.clone()
     rv_values = inner_rv_values | {x: marginalized_vv}

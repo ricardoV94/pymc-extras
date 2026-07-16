@@ -57,7 +57,7 @@ def _hmm_emission_logp(op, chain, dependent_rvs, values):
 
     chain_value = chain.clone()
     dependent_rvs = clone_replace(dependent_rvs, {chain: chain_value})
-    logp_emissions_dict = conditional_logp(dict(zip(dependent_rvs, values)))
+    logp_emissions_dict = conditional_logp(dict(zip(dependent_rvs, values, strict=True)))
 
     # Reduce and add the batch dims beyond the chain dimension
     reduced_logp_emissions = reduce_batch_dependent_logps(
@@ -300,8 +300,8 @@ def discrete_markov_chain_marginalized_conditional(op, inputs, dep_rvs):
         P=P_t, init_dist=init_dist, steps=steps, time_varying_P=True
     )
 
-    replacements = dict(zip(inner_inputs, inputs))
-    replacements.update(zip(dep_dummies, dep_rvs))
+    replacements = dict(zip(inner_inputs, inputs, strict=True))
+    replacements.update(zip(dep_dummies, dep_rvs, strict=True))
     [cond_chain] = graph_replace([cond_chain], replace=replacements, strict=False)
     return cond_chain
 

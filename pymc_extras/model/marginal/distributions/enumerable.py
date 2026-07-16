@@ -182,7 +182,9 @@ def finite_discrete_marginal_rv_logp(op: MarginalFiniteDiscreteRV, values, *inpu
     inner_rvs = list(all_outputs[1 : 1 + op.n_dependent_rvs])
 
     # Obtain the joint_logp graph of the inner RV graph
-    inner_rv_values = dict(zip(inner_rvs, values))
+    # strict: a caller that provides fewer values than there are dependents would
+    # otherwise silently get the joint density of a subset of them
+    inner_rv_values = dict(zip(inner_rvs, values, strict=True))
     marginalized_vv = marginalized_rv.clone()
     rv_values = inner_rv_values | {marginalized_rv: marginalized_vv}
     logps_dict = conditional_logp(rv_values=rv_values, **kwargs)
@@ -260,7 +262,7 @@ def finite_discrete_marginalized_conditional(op, inputs, dep_rvs):
     marginalized_value = marginalized.clone()
     dep_dummies = [dep.type() for dep in dependents]
     rvs_to_values = {marginalized: marginalized_value}
-    rvs_to_values.update(zip(dependents, dep_dummies))
+    rvs_to_values.update(zip(dependents, dep_dummies, strict=True))
 
     logps_dict = conditional_logp(rvs_to_values)
     marginalized_logp = logps_dict[marginalized_value]
@@ -297,8 +299,8 @@ def finite_discrete_marginalized_conditional(op, inputs, dep_rvs):
         # matching the marginalized dtype so the conditional stays loggable.
         sample_graph += rv_domain[0].astype(marginalized.dtype)
 
-    replacements = dict(zip(inner_inputs, inputs))
-    replacements.update(zip(dep_dummies, dep_rvs))
+    replacements = dict(zip(inner_inputs, inputs, strict=True))
+    replacements.update(zip(dep_dummies, dep_rvs, strict=True))
     [sample_graph] = graph_replace([sample_graph], replace=replacements, strict=False)
     return sample_graph
 

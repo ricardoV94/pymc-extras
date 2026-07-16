@@ -21,7 +21,10 @@ from pymc_extras.model.marginal.distributions.core import (
     inline_ofg_outputs,
     marginalized_conditional,
 )
-from pymc_extras.model.marginal.graph_analysis import subgraph_batch_dim_connection
+from pymc_extras.model.marginal.graph_analysis import (
+    get_support_axes,
+    subgraph_batch_dim_connection,
+)
 from pymc_extras.model.marginal.rewrites import (
     MarginalSubgraph,
     extract_marginal_subgraph,
@@ -73,7 +76,23 @@ def warn_non_separable_logp(values):
         )
 
 
-DUMMY_ZERO = pt.constant(0, name="dummy_zero")
+def dummy_logps(op, values) -> tuple[TensorVariable, ...]:
+    """Zero placeholders for the values whose density was folded into the first logp term.
+
+    The joint logp of a MarginalRV cannot be split across its dependents, so it is all assigned
+    to the first value and the rest get a placeholder. Each carries the shape a real term would
+    have -- the value's shape minus the axes its logp reduces -- rather than a bare scalar, so
+    that callers can reason about the term's shape without special-casing the placeholder.
+    """
+    if len(values) < 2:
+        return ()
+
+    placeholders = []
+    for value, supp_axes in zip(values[1:], get_support_axes(op)[1:]):
+        ndim = value.type.ndim
+        kept = [i for i in range(ndim) if (i - ndim) not in supp_axes]
+        placeholders.append(pt.zeros([value.shape[i] for i in kept], dtype=value.type.dtype))
+    return tuple(placeholders)
 
 
 def align_logp_dims(dims: tuple[int | None, ...], logp: TensorVariable) -> TensorVariable:
@@ -125,8 +144,6 @@ def reduce_batch_dependent_logps(
        as well as transpose the remaining axis of dep1 logp before adding the two element-wise.
 
     """
-    from pymc_extras.model.marginal.graph_analysis import get_support_axes
-
     reduced_logps = []
     for dependent_op, dependent_logp, dependent_dims_connection in zip(
         dependent_ops, dependent_logps, dependent_dims_connections
@@ -220,8 +237,7 @@ def finite_discrete_marginal_rv_logp(op: MarginalFiniteDiscreteRV, values, *inpu
 
     warn_non_separable_logp(values)
     # We have to add dummy logps for the remaining value variables, otherwise PyMC will raise
-    dummy_logps = (DUMMY_ZERO,) * (len(values) - 1)
-    return joint_logp, *dummy_logps
+    return joint_logp, *dummy_logps(op, values)
 
 
 @marginalized_conditional.register(MarginalFiniteDiscreteRV)

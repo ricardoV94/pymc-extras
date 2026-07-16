@@ -15,10 +15,10 @@ from pymc_extras.model.marginal.distributions.core import (
     marginalized_conditional,
 )
 from pymc_extras.model.marginal.distributions.enumerable import (
-    DUMMY_ZERO,
     EnumerableMarginalRV,
     align_logp_dims,
     build_enumerable_marginal_rv,
+    dummy_logps,
     reduce_batch_dependent_logps,
     warn_non_separable_logp,
 )
@@ -236,8 +236,7 @@ def marginal_discrete_markov_chain_logp(op, values, *inputs, **kwargs):
     # If there are multiple emission streams, we have to add dummy logps for the remaining value variables. The first
     # return is the joint probability of everything together, but PyMC still expects one logp for each emission stream.
     warn_non_separable_logp(values)
-    dummy_logps = (DUMMY_ZERO,) * (len(values) - 1)
-    return joint_logp, *dummy_logps
+    return joint_logp, *dummy_logps(op, values)
 
 
 @marginalized_conditional.register(MarginalDiscreteMarkovChainRV)

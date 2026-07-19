@@ -13,6 +13,29 @@
 #   limitations under the License.
 
 
+from pymc_extras.gp import kernels, rewrites  # noqa: F401  (registers the Split lift)
+from pymc_extras.gp.gp import (
+    GP,
+    conditional,
+    conditional_covariance,
+    conditional_moments,
+    marginalize,
+    predictive_fn,
+    prior_variance_correction,
+    project,
+)
 from pymc_extras.gp.latent_approx import KarhunenLoeveExpansion, ProjectedProcess
 
-__all__ = ["KarhunenLoeveExpansion", "ProjectedProcess"]
+__all__ = [
+    "GP",
+    "KarhunenLoeveExpansion",
+    "ProjectedProcess",
+    "conditional",
+    "conditional_covariance",
+    "conditional_moments",
+    "kernels",
+    "marginalize",
+    "predictive_fn",
+    "prior_variance_correction",
+    "project",
+]

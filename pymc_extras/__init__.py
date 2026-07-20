@@ -18,7 +18,7 @@ from importlib.metadata import version
 from pymc_extras import gp, marginal, statespace, utils
 from pymc_extras.distributions import *
 from pymc_extras.inference import find_MAP, fit, fit_laplace, fit_pathfinder
-from pymc_extras.model.marginal.conditional import recover_marginals
+from pymc_extras.model.marginal.conditional import conditional, recover_marginals
 from pymc_extras.model.marginal.marginalize import marginalize
 from pymc_extras.model.model_api import as_model
 

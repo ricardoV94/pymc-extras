@@ -100,6 +100,7 @@ import pytensor.tensor as pt
 
 import arviz as az
 import pymc as pm
+import pymc_extras as pmx
 import pymc_extras.gp as pgp
 
 RNG = np.random.default_rng(0)
@@ -156,8 +157,8 @@ at `X`. Nothing downstream knows it is a GP.
 The model holds the **training inputs only**. Prediction inputs are not needed
 here, and putting them in is actively harmful once the latent is sampled:
 unobserved rows become coordinates NUTS must explore with no data to constrain
-them. The appendix covers defining the prior jointly over several input sets and
-the one case that genuinely needs it.
+them. The appendix covers defining the prior jointly over several input sets,
+and how to drop the rows you are not fitting.
 """)
 
 code("""
@@ -178,25 +179,23 @@ print("free_RVs :", [v.name for v in latent_model.free_RVs])
 md(r"""
 ## The building blocks
 
-Two functions carry all the GP-specific content, and they are the *same formula*
-seen twice. For a GP over inputs $Z$ and any new inputs $X_*$:
+`conditional_at(name, X_new, gp)` is the whole prediction API, and it is the
+textbook GP conditional. For a GP over inputs $Z$ and any new inputs $X_*$:
 
 $$A_* = K_{*z}K_{zz}^{-1}, \qquad
 \mathbb{E}[f_* \mid f_z] = A_* f_z, \qquad
 \operatorname{Cov}[f_* \mid f_z] = K_{**} - A_*K_{z*}$$
 
-* `project(gp, X_new)` builds $A_* f_z$ — the **conditional mean**.
-* `conditional_covariance(gp, X_new)` builds $K_{**} - A_*K_{z*}$ — the
-  **conditional covariance**.
-* `prior_variance_correction(gp, X_new)` is its diagonal.
-* `conditional_at(name, X_new, gp)` is the two of them as one `MvNormal`, which
-  is how every prediction below is written. The pieces are shown here because
-  the notebook is about what the API *is*, not because you should assemble them
-  by hand.
+It is an `MvNormal` of two public pieces, `project` (the conditional mean
+$A_*f_z$) and `conditional_covariance` (the conditional covariance). They are
+separate because `project` has a life of its own: it is an *affine* function of
+`gp`, so putting a GP on a few inducing inputs and projecting onto the data is
+the sparse construction, and needs no approximation-specific machinery. That is
+what the variational section below does.
 
-These were written for the sparse case and turned out to be the textbook GP
-conditional. "Inducing points" and "prediction points" are not two ideas: both
-are some other set of inputs you want the GP at, reached by the same linear map.
+These were written for the sparse case and turned out to be the GP conditional.
+"Inducing points" and "prediction points" are not two ideas: both are some other
+set of inputs you want the GP at, reached by the same linear map.
 """)
 
 code("""
@@ -244,18 +243,25 @@ plt.show()
 """)
 
 # ------------------------------------------------------------ conjugate
-md("""
+md(r"""
 ## A conjugate likelihood: marginalize, then condition
 
 The latent integrates out in closed form, so NUTS samples 3 hyperparameters
-instead of 3 + 60. `conditional` then returns a model in which `gp` is a free RV
-whose distribution *is* the posterior, still symbolic in the hyperparameters. So
-the latent comes back, and prediction proceeds exactly as if it had been sampled
-all along.
+instead of 3 + 60.
+
+That leaves nothing to predict *from*: `gp` no longer exists in the model, so
+there is no variable for `project` to project. `pmx.conditional` puts it back,
+as a free RV whose distribution is the posterior $p(f \mid y)$, still symbolic
+in the hyperparameters. It is generic linear-Gaussian machinery, not a GP
+function -- the same call recovers any marginalized variable.
+
+That one extra call is the only difference between this path and the two below.
+Once `gp` is back, prediction is identical, because `conditional_at` only ever
+needed draws of `gp`.
 """)
 
 code("""
-marginal_model = pgp.marginalize(latent_model, ["gp"])
+marginal_model = pmx.marginalize(latent_model, ["gp"])
 print("free_RVs before:", [v.name for v in latent_model.free_RVs])
 print("free_RVs after :", [v.name for v in marginal_model.free_RVs])
 
@@ -272,7 +278,7 @@ print(
 """)
 
 code("""
-cond_model = pgp.conditional(marginal_model)
+cond_model = pmx.conditional(marginal_model)   # gp comes back as a free RV
 print("free_RVs:", [v.name for v in cond_model.free_RVs], " <- gp is back")
 
 # ---- the prediction block, verbatim in every fit path below ----
@@ -297,62 +303,6 @@ ax.plot(xg, np.sin(6 * xg), ls="--", lw=1, label="true function")
 ax.axvspan(-0.3, 0, color="k", alpha=0.05)
 ax.axvspan(1.0, 1.3, color="k", alpha=0.05)
 ax.set_title("Exact GP posterior predictive (shaded = extrapolation)")
-ax.legend(loc="lower left", ncols=2)
-plt.show()
-""")
-
-md(r"""
-### The closed form, and a trap
-
-Drawing `f_pred` is Monte Carlo over a conditional that is available in closed
-form. `predictive_moments(gp, X_new, mu, cov)` gives it directly: it pushes a
-*posterior over* `f_z` forward rather than conditioning on one known draw of it,
-
-$$\mathbb{E}[f_*] = A\mu, \qquad \operatorname{Cov}[f_*] = A\Sigma A^\top + (K_{**} - A K_{z*})$$
-
-which is the same affine-Gaussian pushforward as everything else. The two agree
-to Monte Carlo error.
-
-The trap it exists to close: `conditional_covariance` alone is
-$\operatorname{Cov}[f_* \mid f_z]$, so pairing it with a posterior *mean* keeps
-the conditional spread and silently drops $A\Sigma A^\top$ — the posterior's own
-uncertainty. Nothing errors; the bands just come out too narrow, most severely
-where the data pins `f_z` down least.
-""")
-
-code("""
-mu_sym, cov_sym = pgp.conditional_moments(cond_model)
-pm_sym, pcov_sym = pgp.predictive_moments(cond_model["gp"], X_pred, mu_sym, cov_sym)
-closed = pgp.predictive_fn(cond_model, [pm_sym, pt.sqrt(pt.diag(pcov_sym))])
-naive = pgp.predictive_fn(cond_model, [pt.sqrt(pt.diag(
-    pgp.conditional_covariance(cond_model["gp"], X_pred)))])
-
-post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
-ms, ss, ns = [], [], []
-for i in range(0, post.sizes["sample"], 8):
-    s = post.isel(sample=i)
-    point = {f"{v}_log__": float(np.log(s[v])) for v in ("ls", "eta", "sigma")}
-    m_, sd_ = closed(point)
-    ms.append(m_)
-    ss.append(sd_)
-    ns.append(naive(point)[0])
-
-ms, ss, ns = np.array(ms), np.array(ss), np.array(ns)
-cf_mean = ms.mean(0)
-cf_sd = np.sqrt((ss ** 2).mean(0) + ms.var(0))     # law of total variance
-naive_sd = np.sqrt((np.array(ns) ** 2).mean(0) + ms.var(0))
-
-print("closed form vs draws: max |mean diff| =", round(float(np.abs(cf_mean - mean_pred).max()), 4))
-print("                      max |sd   diff| =", round(float(np.abs(cf_sd - sd_pred).max()), 4))
-print("dropping A S A^T understates variance by up to",
-      round(float((cf_sd ** 2 / naive_sd ** 2).max())), "x")
-
-fig, ax = plt.subplots()
-ax.fill_between(xg, cf_mean - 2 * cf_sd, cf_mean + 2 * cf_sd, alpha=0.25, label="correct ±2 sd")
-ax.plot(xg, cf_mean - 2 * naive_sd, color="C3", lw=1, ls="--", label="conditional_covariance only")
-ax.plot(xg, cf_mean + 2 * naive_sd, color="C3", lw=1, ls="--")
-ax.plot(X.ravel(), y, "o", ms=4, label="observations")
-ax.set_title("predictive_moments vs dropping the posterior's own spread")
 ax.legend(loc="lower left", ncols=2)
 plt.show()
 """)
@@ -390,7 +340,7 @@ with pm.Model() as bern_model:
     pm.Bernoulli("y", logit_p=gp_b, observed=y_b)
 
 try:
-    pgp.marginalize(bern_model, ["gp"])
+    pmx.marginalize(bern_model, ["gp"])
 except NotImplementedError as exc:
     print("marginalize declines:", str(exc)[:70], "...")
 
@@ -498,11 +448,6 @@ md(r"""
 2. **Non-centered parameterization.** `GP` has no `parameterization=`, which is
    what caps the sampled-latent path at around a hundred observations.
 
-3. **`SubsetMarginalRV`.** `marginalize_subset` (appendix) discards the dropped
-   rows rather than keeping them as an unused output of a `MarginalRV`, so plain
-   `conditional` cannot recover them. `project` and `predictive_moments` can, so
-   this is uniformity rather than capability.
-
 Shallow by construction: kernel coverage, no mean-function namespace, no
 multi-output or Kronecker structure, no `predict_f` / `predict_y` wrappers.
 
@@ -523,25 +468,25 @@ multi-output or Kronecker structure, no `predict_f` / `predict_y` wrappers.
 md(r"""
 ---
 
-## Appendix: packing, and the case that needs it
+## Appendix: packing
 
 Everything above puts the prior on the training inputs and reaches new inputs
-with `project`. The alternative is to define the prior **jointly** over every
-input set up front, stacked with `pt.pack`, and let `pt.unpack` slice it:
+with `conditional_at`. The alternative is to define the prior **jointly** over
+every input set up front, stacked with `pt.pack`, and let `pt.unpack` slice it:
 "observed at the training points" is then `f_train`, a plain slice, which is
 affine, which is all the marginalization needs.
 
-This is strictly more general in *what map* relates the latent to the
-observations — the conjugacy rewrite accepts any affine `g`, not just a subset —
-but it is not the way to predict. It fixes the prediction inputs at build time,
-and it duplicates what `project` already does.
+It is not the way to predict — it fixes the prediction inputs at build time, and
+duplicates what `conditional_at` already does. It is here because it exercises
+the one part of the machinery the main path does not: marginalizing *part* of a
+variable.
 
 Packing is free when the latent is marginalized (`pymc_extras.gp.rewrites` lifts
 the `Split` that `pt.unpack` emits, so an unused partition never enters the
 covariance: 4000 prediction rows go from 367 ms to 0.13 ms). It is *not* free
-when the latent is sampled. `marginalize_subset` removes the rows nothing
-downstream reads — their factor integrates to one, so no conjugacy is needed and
-the posterior over what remains is unchanged.
+when the latent is sampled. Naming a block and passing that name to
+`marginalize` removes it — its factor integrates to one, so no conjugacy is
+needed and the posterior over what remains is unchanged.
 """)
 
 code("""
@@ -553,7 +498,7 @@ with pm.Model() as packed_model:
     pgp.name_variable("f_pred", f_pred_slice)      # the handle to marginalize
     pm.Bernoulli("y", logit_p=f_train, observed=(y > 0).astype(int))
 
-reduced = pgp.marginalize(packed_model, ["f_pred"])   # same entry point
+reduced = pmx.marginalize(packed_model, ["f_pred"])   # same entry point
 print("packed gp :", packed_model["gp"].type.shape)
 print("reduced   :", reduced["gp"].type.shape, " <- the 80 unread rows are gone")
 
@@ -577,7 +522,7 @@ wrong covariance:
 """)
 
 code("""
-cond_sub = pgp.conditional(reduced)
+cond_sub = pmx.conditional(reduced)
 print("free_RVs:", [v.name for v in cond_sub.free_RVs], " <- the dropped block is back")
 
 rv_u = cond_sub["f_pred"]
@@ -607,40 +552,9 @@ with pm.Model() as read_model:
     pgp.name_variable("f_train", a)
     pm.Bernoulli("y", logit_p=a, observed=(y > 0).astype(int))
 try:
-    pgp.marginalize(read_model, ["f_train"])
+    pmx.marginalize(read_model, ["f_train"])
 except NotImplementedError as exc:
     print("declines:", str(exc)[:76], "...")
-""")
-
-md(r"""
-The one thing packing expresses that `project` cannot: an observation that is a
-general **affine map** of the latent rather than a slice of it,
-$y \sim \mathcal{N}(Wf + b, \sigma^2)$. Here the observation is not a set of
-rows, so there is nothing for `project` to project. The conjugacy rewrite
-handles it unchanged, and `conditional` gives closed-form joint posterior
-moments over the whole latent.
-""")
-
-code("""
-W = RNG.normal(size=(12, N_TRAIN))
-y_w = W @ np.sin(6 * X.ravel()) + 0.1 * RNG.normal(size=12)
-
-with pm.Model() as affine_model:
-    ls_w = pm.InverseGamma("ls", alpha=3.0, beta=1.0)
-    gp_w = pgp.GP("gp", X, cov=pgp.kernels.Matern52(ls=ls_w))
-    pm.Normal("y", mu=W @ gp_w, sigma=0.1, observed=y_w)   # not a slice
-
-cond_w = pgp.conditional(pgp.marginalize(affine_model, ["gp"]))
-mu_w, cov_w = pgp.conditional_moments(cond_w)
-mu_hat, sd_hat = pgp.predictive_fn(cond_w, [mu_w, pt.sqrt(pt.diag(cov_w))])({"ls_log__": np.log(0.3)})
-
-fig, ax = plt.subplots()
-ax.fill_between(X.ravel(), mu_hat - 2 * sd_hat, mu_hat + 2 * sd_hat, alpha=0.25, label="±2 sd")
-ax.plot(X.ravel(), mu_hat, lw=2, label="posterior mean")
-ax.plot(X.ravel(), np.sin(6 * X.ravel()), ls="--", lw=1, label="true function")
-ax.set_title("$f$ recovered from 12 linear projections $Wf$, never observed directly")
-ax.legend(loc="lower left")
-plt.show()
 """)
 
 # ===========================================================================

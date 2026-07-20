@@ -1,4 +1,8 @@
-"""Execute gp_api.ipynb in place, embedding outputs.
+"""Execute gp_api.ipynb in place, embedding outputs, and refresh the HTML preview.
+
+The preview is written on every full run, because keeping it in step by hand does
+not work: it silently drifted three times in one session, each time reflecting an
+older notebook than the committed one.
 
 ``--fast`` runs it as a smoke test instead: inference settings are shrunk to a
 few draws/iterations so the whole notebook runs in well under a minute, and the
@@ -9,6 +13,7 @@ deliverable, since the fast one's numbers and figures are noise.
 
 import pathlib
 import re
+import subprocess
 import sys
 
 import nbformat
@@ -60,6 +65,23 @@ if FAST:
 
 nbformat.write(nb, path)
 
+subprocess.run(
+    [
+        sys.executable,
+        "-m",
+        "jupyter",
+        "nbconvert",
+        "--to",
+        "html",
+        "--output",
+        "gp_api_preview.html",
+        str(path),
+    ],
+    capture_output=True,
+    text=True,
+    cwd=str(here),
+)
+
 n_code = sum(1 for c in nb.cells if c.cell_type == "code")
 n_out = sum(1 for c in nb.cells if c.cell_type == "code" and c.outputs)
 n_img = sum(
@@ -69,4 +91,7 @@ n_img = sum(
     for o in c.outputs
     if "image/png" in getattr(o, "get", lambda *_: {})("data", {})
 )
-print(f"OK: {len(nb.cells)} cells, {n_code} code cells, {n_out} produced output, {n_img} figures")
+print(
+    f"OK: {len(nb.cells)} cells, {n_code} code cells, {n_out} produced output, "
+    f"{n_img} figures; preview refreshed"
+)

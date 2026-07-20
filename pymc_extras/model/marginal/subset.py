@@ -1,6 +1,7 @@
 """Marginalize a *named* sub-block of a Gaussian latent.
 
-`marginalize` removes a whole random variable. This removes part of one: the
+`marginalize` removes a whole random variable. This is the same call removing
+part of one: the
 coordinates of a packed `MvNormal` that no dependent variable reads. Their
 factor integrates to one, so the posterior over the rest is unchanged and no
 conjugacy is required.
@@ -41,14 +42,8 @@ import numpy as np
 import pytensor.tensor as pt
 
 from pymc import MvNormal, modelcontext
-from pymc.model.fgraph import (
-    ModelFreeRV,
-    ModelNamed,
-    fgraph_from_model,
-    model_free_rv,
-    model_from_fgraph,
-)
-from pytensor.graph.fg import FunctionGraph, Output
+from pymc.model.fgraph import ModelFreeRV, ModelNamed, model_free_rv
+from pytensor.graph.fg import Output
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor.basic import Split
 from pytensor.tensor.reshape import SplitDims
@@ -57,13 +52,13 @@ from pytensor.tensor.subtensor import Subtensor, get_idx_list
 
 from pymc_extras.model.marginal.distributions.subset_gaussian import build_subset_marginal
 
-__all__ = ["marginalize_named_subset", "name_variable"]
+__all__ = ["marginalize_named_subset_fgraph", "name_variable"]
 
 
 def name_variable(name, var, model=None):
     """Register `var` under `name`, as neither an RV nor a Deterministic.
 
-    The handle `marginalize_named_subset` needs to identify a sub-block.
+    The handle `marginalize` needs to identify a sub-block.
     Deliberately not a `Deterministic`: those block marginalization of anything
     they depend on, and are recomputed for every draw, neither of which suits a
     partition marker.
@@ -143,15 +138,13 @@ def _block_parent(var):
     return None
 
 
-def marginalize_named_subset(model, name):
-    """Marginalize the named sub-block `name` of a Gaussian latent.
+def marginalize_named_subset_fgraph(fg, name):
+    """Marginalize the named sub-block `name` of a Gaussian latent, in place.
 
-    The returned model samples only the coordinates that remain. Recover the
-    dropped ones with ``conditional(m2)[name]``, which carries the exact
-    Gaussian conditional.
+    The parent keeps its name and shrinks to the coordinates that remain.
+    Recover the dropped ones with ``conditional(m2)[name]``, which carries the
+    exact Gaussian conditional.
     """
-    fg, _memo = fgraph_from_model(model)
-
     named = [
         v
         for v in fg.variables
@@ -266,9 +259,10 @@ def marginalize_named_subset(model, name):
     if kept_uses:
         fg.replace_all([(v, new_model_rv) for v in kept_uses], import_missing=True)
 
-    # The parent shrinks and the name handle is consumed, so rebuild the output
-    # list rather than swapping in place.
-    outputs = [
-        new_model_rv if out is model_rv else out for out in fg.outputs if out is not named_var
-    ]
-    return model_from_fgraph(FunctionGraph(outputs=outputs, clone=False))
+    # The name handle is consumed and the parent shrinks, so its output is
+    # replaced rather than swapped in place (the types differ).
+    if named_var in fg.outputs:
+        fg.remove_output(fg.outputs.index(named_var))
+    if model_rv in fg.outputs:
+        fg.remove_output(fg.outputs.index(model_rv))
+    fg.add_output(new_model_rv, reason="marginalize-subset", import_missing=True)

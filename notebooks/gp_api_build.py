@@ -553,7 +553,7 @@ with pm.Model() as packed_model:
     pgp.name_variable("f_pred", f_pred_slice)      # the handle to marginalize
     pm.Bernoulli("y", logit_p=f_train, observed=(y > 0).astype(int))
 
-reduced = pgp.marginalize_named_subset(packed_model, "f_pred")
+reduced = pgp.marginalize(packed_model, ["f_pred"])   # same entry point
 print("packed gp :", packed_model["gp"].type.shape)
 print("reduced   :", reduced["gp"].type.shape, " <- the 80 unread rows are gone")
 
@@ -607,7 +607,7 @@ with pm.Model() as read_model:
     pgp.name_variable("f_train", a)
     pm.Bernoulli("y", logit_p=a, observed=(y > 0).astype(int))
 try:
-    pgp.marginalize_named_subset(read_model, "f_train")
+    pgp.marginalize(read_model, ["f_train"])
 except NotImplementedError as exc:
     print("declines:", str(exc)[:76], "...")
 """)

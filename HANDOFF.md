@@ -114,8 +114,9 @@ registered.
 * **`SubsetMarginalRV`** (`distributions/subset_gaussian.py`). The only
   `MarginalRV` whose marginalized quantity is a *sub-block* of a variable, so
   the op carries the partition as a boolean mask (dropped rows need not be
-  contiguous or trailing). Driven by `marginalize_named_subset(model, name)`,
-  where the block is identified by `name_variable(name, gp[...])` -- a
+  contiguous or trailing). Driven by `marginalize(model, ["f_pred"])` -- the
+  same entry point as whole variables -- where the block is identified by
+  `name_variable(name, gp[...])`, a
   `ModelNamed` handle, which is neither a free RV (the sampler would explore it)
   nor a `Deterministic` (which blocks marginalizing `gp` at all). Naming it
   means `conditional` returns it under that name, and that the partition is
@@ -154,11 +155,7 @@ registered.
 1. **Woodbury / structured covariance** — the standing scaling item; `A K A'` is
    densified, so sparse is O(n^2.3) not O(n m^2). Same work item as low-rank
    ADVI guides.
-2. **Fold it into `marginalize`.** `marginalize(m, ["f_pred"])` should work, so
-   there is one entry point for whole variables and sub-blocks. Currently
-   `marginalize_named_subset` is separate. The naming design removes the
-   obstacle that made this awkward.
-3. **Reversible sub-block marginalization.** `SubsetMarginalRV` landed and
+2. **Reversible sub-block marginalization.** `SubsetMarginalRV` landed and
    `conditional` recovers the dropped block, but `unmarginalize` **declines**:
    restoring the two halves as separate free RVs gives one shared `MvNormal`
    draw sliced twice, whose joint logp pymc cannot derive (verified: it raises

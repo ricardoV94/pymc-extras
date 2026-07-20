@@ -51,6 +51,7 @@ from pymc_extras.model.marginal.rewrites import (
     local_unmarginalize,
     marginalize_rewrites_db,
 )
+from pymc_extras.model.marginal.subset import marginalize_named_subset_fgraph
 
 ModelRVs = TensorVariable | Sequence[TensorVariable] | str | Sequence[str]
 
@@ -357,11 +358,30 @@ def marginalize(
     if not rvs_to_marginalize:
         return model
 
+    # A named sub-block of a latent is marginalized by shrinking its parent,
+    # not by wrapping a Markov blanket, so it takes a different route through
+    # the fgraph. See `subset.py`.
+    block_names = [rv.name for rv in rvs_to_marginalize if rv in model.data_vars]
+    rvs_to_marginalize = [rv for rv in rvs_to_marginalize if rv not in model.data_vars]
+
     for rv_to_marginalize in rvs_to_marginalize:
         if rv_to_marginalize not in model.free_RVs:
             raise ValueError(f"Marginalized RV {rv_to_marginalize} is not a free RV in the model")
 
     fg, memo = fgraph_from_model(model)
+
+    # Blocks first: they shrink their parent, which invalidates `memo` for it,
+    # so any remaining targets are re-found by name afterwards.
+    if block_names:
+        for name in block_names:
+            marginalize_named_subset_fgraph(fg, name)
+        if rvs_to_marginalize:
+            by_name = {
+                node.outputs[0].name: node.outputs[0]
+                for node in fg.toposort()
+                if isinstance(node.op, ModelValuedVar)
+            }
+            memo = {**memo, **{rv: by_name[rv.name] for rv in rvs_to_marginalize}}
 
     # Remap rvs and Qs (which may reference model variables) to the fgraph clones
     laplace_approx_fg = {}
@@ -369,6 +389,9 @@ def marginalize(
         if not isinstance(Q, Variable):
             Q = pt.as_tensor_variable(Q)
         laplace_approx_fg[memo[rv]] = memo.get(Q, Q).copy()
+
+    if not rvs_to_marginalize:
+        return model_from_fgraph(fg, mutate_fgraph=True)
 
     marginalize_fgraph(
         fg,

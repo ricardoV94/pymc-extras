@@ -17,6 +17,10 @@ are exactly ``p(f_unobserved | f_observed)``.
 Scoped to slice-shaped uses (`pt.unpack`, `gp[:n]`), where the unobserved
 coordinates are axis-aligned. For a general affine map the unused subspace is
 the null space of ``A``, which is not a set of rows, and this declines.
+
+The dropped rows are kept as an unused output of a `SubsetMarginalRV` rather
+than discarded, so the transform is reversible and `conditional` recovers them
+with the exact Gaussian conditional. See `distributions/subset_gaussian.py`.
 """
 
 import pytensor.tensor as pt
@@ -27,6 +31,8 @@ from pytensor.graph.fg import FunctionGraph, Output
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor.basic import Split
 from pytensor.tensor.subtensor import Subtensor, get_idx_list
+
+from pymc_extras.model.marginal.distributions.subset_gaussian import build_subset_marginal
 
 __all__ = ["marginalize_subset"]
 
@@ -105,13 +111,18 @@ def marginalize_subset(model, name):
     if rv in ancestors([mu, cov]):
         raise NotImplementedError("Self-referential prior parameters")
 
-    small = MvNormal.dist(mu=pt.atleast_1d(mu)[:n_obs], cov=cov[:n_obs, :n_obs])
+    # The dropped rows stay reachable as the op's first output, which is what
+    # lets `conditional` hand them back; the kept block is its second.
+    _unobs, obs = build_subset_marginal(
+        rv, n_obs, marginalized_name=f"{name}_unobserved", marginalized_dims=()
+    )
+
     # name / dims / transform live on the Op, not among the inputs
     op = model_rv.owner.op
     [value] = model_rv.owner.inputs[1:]
-    new_value = small.type()
+    new_value = obs.type()
     new_value.name = value.name
-    new_model_rv = model_free_rv(small, new_value, op.transform, op.name, *op.dims)
+    new_model_rv = model_free_rv(obs, new_value, op.transform, op.name, *op.dims)
 
     # every use was `rv[:n_obs]`, which the reduced variable now supplies whole
     slice_uses = [

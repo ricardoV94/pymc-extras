@@ -111,6 +111,17 @@ registered.
   `conditional_covariance`, `prior_variance_correction` match closed forms both
   on a fresh GP and off `conditional(...)`, including when the observation is a
   general affine map `W @ gp` rather than a slice.
+* **`SubsetMarginalRV`** (`distributions/subset_gaussian.py`). The only
+  `MarginalRV` whose marginalized quantity is a *sub-block* of a variable, so
+  the op carries the partition `n_obs`. Its logp is the marginal over the kept
+  block and its `marginalized_conditional` is the Gaussian conditional of the
+  dropped one -- which *is* `project` + `conditional_covariance`, now living
+  inside a generic op instead of a GP-specific helper. Verified against the
+  closed form and against those two functions to 7e-6. `marginalize_subset`
+  builds it, so `conditional(reduced)["gp_unobserved"]` recovers the block with
+  no GP-specific call and no way to pair a posterior mean with the wrong
+  covariance. It does **not** help predict at new inputs: the partition is fixed
+  at build time, which is what `project` exists for.
 * **Zero-dependent marginalization.** `marginalize` on an RV nothing depends on
   used to silently no-op. It now does the well-defined thing: the factor
   integrates to one, so the variable is dropped, and a `ModelNamed` anchor keeps
@@ -132,24 +143,16 @@ registered.
 
 ## 4. Next steps, in priority order
 
-1. **`SubsetMarginalRV`.** Rather than `marginalize_subset` discarding the
-   dropped rows, keep them as an unused output of a `MarginalRV`, following
-   `linear_gaussian.py`'s pattern (op + `_logprob` + `marginalized_conditional`).
-   Then plain `conditional()` recovers the block with no new function.
-
-   **The blocker for this is now gone.** It needed a way for a `MarginalRV` node
-   to stay reachable in the model fgraph with nothing referencing it; that is
-   exactly `anchor_marginalized_output` / `drop_marginalized_anchor` in
-   `rewrites.py`, built for the zero-dependent case (see below). Follow
-   `distributions/trivial.py`, which is the smallest complete example of a
-   `MarginalRV` subclass + rewrite + conditional.
-
-   Still a refactor rather than new capability: `project` + `predictive_moments`
-   already recover the block correctly.
-
-2. **Woodbury / structured covariance** — the standing scaling item; `A K A'` is
+1. **Woodbury / structured covariance** — the standing scaling item; `A K A'` is
    densified, so sparse is O(n^2.3) not O(n m^2). Same work item as low-rank
    ADVI guides.
+2. **Reversible `marginalize_subset`.** `SubsetMarginalRV` landed and
+   `conditional` recovers the dropped block, but `unmarginalize` **declines**:
+   restoring the two halves as separate free RVs gives one shared `MvNormal`
+   draw sliced twice, whose joint logp pymc cannot derive (verified: it raises
+   "logprob terms could not be derived"). A correct unmarginalize has to rebuild
+   the packed variable and rewire the slice uses, which changes a model
+   variable's shape. Only worth doing if round-tripping is actually wanted.
 
 ## 5. The notebook
 

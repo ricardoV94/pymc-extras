@@ -34,6 +34,7 @@ from pymc_extras.model.marginal.distributions.core import (
     inline_ofg_outputs,
 )
 from pymc_extras.model.marginal.distributions.laplace import MarginalLaplaceRV
+from pymc_extras.model.marginal.distributions.subset_gaussian import SubsetMarginalRV
 from pymc_extras.model.marginal.graph_analysis import (
     find_conditional_dependent_rvs,
     find_conditional_input_rvs,
@@ -410,6 +411,19 @@ def unmarginalize(model: Model, rvs_to_unmarginalize: str | Sequence[str] | None
     """
 
     fg, _memo = fgraph_from_model(model)
+
+    # A sub-block marginalization cannot be undone this way: the two halves
+    # would come back as separate free RVs slicing one shared draw, whose joint
+    # logp pymc cannot derive. Use `conditional` to recover the dropped rows.
+    subset_names = [
+        op.marginalized_name for op in _walk_marginal_ops(fg) if isinstance(op, SubsetMarginalRV)
+    ]
+    if subset_names:
+        raise NotImplementedError(
+            f"Cannot unmarginalize {subset_names}: these are sub-blocks of a Gaussian "
+            "latent, and restoring them as separate variables would give a model with "
+            "no derivable logp. Use `conditional` to recover them instead."
+        )
 
     if rvs_to_unmarginalize is None:
         unmarginalize_fgraph(fg)

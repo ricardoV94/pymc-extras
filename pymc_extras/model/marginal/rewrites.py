@@ -203,17 +203,16 @@ def local_unmarginalize(fgraph, node):
     # Pin already-built model-var wrappers (opaque ModelValuedVar) as boundaries so
     # graph_replace does not clone their subgraphs, otherwise a shared upstream RV
     # they wrap (e.g. a previously unmarginalized parent) gets duplicated.
-    # With no dependents there is nothing to rewire, and graph_replace would
-    # reject the unused replacement.
-    if dependent_rvs:
-        pinned = {
-            a: a
-            for a in ancestors(dependent_rvs)
-            if a.owner is not None and isinstance(a.owner.op, ModelValuedVar)
-        }
-        dependent_rvs = graph_replace(
-            dependent_rvs, {**pinned, unmarginalized_rv: unmarginalized_free_rv}
-        )
+    # strict=False: the replacement goes unused when there are no dependents, or
+    # when the marginalized variable is a sibling of them rather than an ancestor.
+    pinned = {
+        a: a
+        for a in ancestors(dependent_rvs)
+        if a.owner is not None and isinstance(a.owner.op, ModelValuedVar)
+    }
+    dependent_rvs = graph_replace(
+        dependent_rvs, {**pinned, unmarginalized_rv: unmarginalized_free_rv}, strict=False
+    )
 
     return [unmarginalized_free_rv, *dependent_rvs, *rngs]
 

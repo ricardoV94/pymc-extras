@@ -542,6 +542,40 @@ print("logp matches it exactly:",
 """)
 
 md(r"""
+The dropped rows are not discarded: they are kept as an unused output of a
+`SubsetMarginalRV`, whose conditional is the Gaussian conditional of the block
+given the rest. So `conditional` hands them back on its own, with no GP-specific
+call and no chance of pairing a posterior mean with the wrong covariance:
+""")
+
+code("""
+cond_sub = pgp.conditional(reduced)
+print("free_RVs:", [v.name for v in cond_sub.free_RVs], " <- the dropped block is back")
+
+rv_u = cond_sub["gp_unobserved"]
+mu_u, cov_u = rv_u.owner.op.dist_params(rv_u.owner)
+f_obs = np.sin(6 * X.ravel())
+point = {"ls_log__": np.log(0.3), "gp": f_obs}
+got_mu, got_sd = pgp.predictive_fn(cond_sub, [mu_u, pt.sqrt(pt.diag(cov_u))])(point)
+
+# identical to what project / conditional_covariance compute by hand
+with unpacked_model:
+    ref = pgp.predictive_fn(unpacked_model, [
+        pgp.project(unpacked_model["gp"], X_pred),
+        pt.sqrt(pt.diag(pgp.conditional_covariance(unpacked_model["gp"], X_pred))),
+    ])
+ref_mu, ref_sd = ref(point)
+print("matches project / conditional_covariance:",
+      np.allclose(got_mu, ref_mu, atol=1e-5), np.allclose(got_sd, ref_sd, atol=1e-5))
+
+from pymc_extras.model.marginal.marginalize import unmarginalize
+try:
+    unmarginalize(reduced)
+except NotImplementedError as exc:
+    print("unmarginalize declines:", str(exc)[:80], "...")
+""")
+
+md(r"""
 The one thing packing expresses that `project` cannot: an observation that is a
 general **affine map** of the latent rather than a slice of it,
 $y \sim \mathcal{N}(Wf + b, \sigma^2)$. Here the observation is not a set of

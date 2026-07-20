@@ -27,7 +27,8 @@ from pymc_extras.gp.data import build_kernel_op, kernel_of
 from pymc_extras.model.marginal import (  # noqa: F401
     conditional,
     marginalize,
-    marginalize_subset,
+    marginalize_named_subset,
+    name_variable,
 )
 
 # importing `marginal` above registers the linear-Gaussian conjugacy rewrite

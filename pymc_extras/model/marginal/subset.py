@@ -1,138 +1,274 @@
-"""Marginalize the coordinates of a latent that never reach the likelihood.
+"""Marginalize a *named* sub-block of a Gaussian latent.
 
-`marginalize` removes a whole random variable. This removes a *subset* of one:
-the rows of a packed Gaussian latent that nothing downstream reads.
+`marginalize` removes a whole random variable. This removes part of one: the
+coordinates of a packed `MvNormal` that no dependent variable reads. Their
+factor integrates to one, so the posterior over the rest is unchanged and no
+conjugacy is required.
 
 Packing prediction inputs into the prior is free when the latent is
-marginalized, but not when it is *sampled*: the unobserved rows become
-coordinates NUTS must explore, constrained only by the prior and correlated with
-the observed ones through K.
+marginalized, but not when it is *sampled*: the unread rows become coordinates
+NUTS must explore, constrained only by the prior and correlated with the rest
+through K.
 
-Their contribution to the model density is a factor that integrates to one, so
-removing them changes nothing about the posterior over what remains -- this is
-marginalization in the degenerate case, with no conjugacy requirement. What is
-left is recovered afterwards by `project` and `conditional_covariance`, which
-are exactly ``p(f_unobserved | f_observed)``.
+The block is identified by naming it in the model::
 
-Scoped to slice-shaped uses (`pt.unpack`, `gp[:n]`), where the unobserved
-coordinates are axis-aligned. For a general affine map the unused subspace is
-the null space of ``A``, which is not a set of rows, and this declines.
+    gp = pgp.GP("gp", Xs, cov=k)
+    f_train, f_pred = pt.unpack(gp, shapes)
+    name_variable("f_pred", f_pred)
+    pm.Bernoulli("y", logit_p=f_train, observed=y)
 
-The dropped rows are kept as an unused output of a `SubsetMarginalRV` rather
-than discarded, so the transform is reversible and `conditional` recovers them
-with the exact Gaussian conditional. See `distributions/subset_gaussian.py`.
+    m2 = marginalize_named_subset(m, "f_pred")  # `gp` shrinks to the train rows
+
+A name rather than an inferred partition, for two reasons. It keeps
+`marginalize`'s contract that marginalized variables are referred to by name --
+they no longer exist as variables, so a name is the only handle left, and
+``conditional(m2)["f_pred"]`` gives the block back. And it turns an inference
+into a validation: the partition is stated, and this checks that nothing
+downstream reads it, rather than scanning the graph for slice patterns and
+silently declining on anything that was not a single leading slice.
+
+`ModelNamed` is the right category for that handle. It names a variable without
+making it a free RV (which the sampler would then explore) or a `Deterministic`
+(which blocks marginalization of anything it reads). It is the same wrapper used
+to anchor marginalized variables, so a partition goes in and comes back out
+through one mechanism.
+
+Scoped to blocks nothing reads. Marginalizing a block the likelihood *does* read
+is a conjugacy problem, not this one, and declines with a pointer.
 """
 
+import numpy as np
 import pytensor.tensor as pt
 
-from pymc import MvNormal
-from pymc.model.fgraph import ModelFreeRV, fgraph_from_model, model_free_rv, model_from_fgraph
+from pymc import MvNormal, modelcontext
+from pymc.model.fgraph import (
+    ModelFreeRV,
+    ModelNamed,
+    fgraph_from_model,
+    model_free_rv,
+    model_from_fgraph,
+)
 from pytensor.graph.fg import FunctionGraph, Output
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor.basic import Split
+from pytensor.tensor.reshape import SplitDims
+from pytensor.tensor.shape import Reshape, SpecifyShape
 from pytensor.tensor.subtensor import Subtensor, get_idx_list
 
 from pymc_extras.model.marginal.distributions.subset_gaussian import build_subset_marginal
 
-__all__ = ["marginalize_subset"]
+__all__ = ["marginalize_named_subset", "name_variable"]
 
 
-def _observed_prefix(fgraph, rv):
-    """Length of the leading block of `rv` that reaches anything else.
+def name_variable(name, var, model=None):
+    """Register `var` under `name`, as neither an RV nor a Deterministic.
 
-    Returns None unless every use of `rv` is a slice of the form ``rv[:n]``
-    (which is what both ``gp[:n]`` and ``pt.unpack`` reduce to).
+    The handle `marginalize_named_subset` needs to identify a sub-block.
+    Deliberately not a `Deterministic`: those block marginalization of anything
+    they depend on, and are recomputed for every draw, neither of which suits a
+    partition marker.
     """
-    lengths = set()
-    for client, _ in fgraph.clients.get(rv, []):
-        op = getattr(client, "op", None)
-        if isinstance(op, Output):
-            # every model variable is an fgraph output; not a real use
-            continue
-        if isinstance(op, Split):
-            # only the first partition may be used
-            used = [i for i, o in enumerate(client.outputs) if fgraph.clients.get(o)]
-            if used != [0]:
-                return None
-            splits = client.inputs[1]
-            try:
-                lengths.add(int(splits.eval()[0]))
-            except Exception:
-                return None
-        elif isinstance(op, Subtensor):
-            [idx] = get_idx_list(client.inputs, op.idx_list)
-            if (
-                not isinstance(idx, slice)
-                or idx.start not in (None, 0)
-                or idx.step not in (None, 1)
-            ):
-                return None
-            try:
-                lengths.add(int(pt.as_tensor(idx.stop).eval()))
-            except Exception:
-                return None
-        else:
+    model = modelcontext(model)
+    var = pt.as_tensor(var)
+    # Name in place. `var.copy()` would insert a DeepCopyOp between the handle
+    # and the block it points at, which is exactly the link that identifies the
+    # partition.
+    var.name = name
+    model.register_data_var(var)
+    return var
+
+
+def _slice_positions(var, parent, length):
+    """Integer positions of `parent` that `var` reads.
+
+    Handles both forms a partition takes: a `Subtensor` (``gp[:n]``) and one
+    output of a `Split` (which is what `pt.unpack` emits). None if `var` is not
+    a static, axis-aligned block of `parent`'s leading axis.
+    """
+    node = var.owner
+    if node is None:
+        return None
+
+    # `pt.unpack` reshapes each piece after splitting, so the handle sits above
+    # a shape op rather than directly on the block. These preserve the leading
+    # axis element-for-element, so look through them.
+    if isinstance(node.op, SplitDims | Reshape | SpecifyShape):
+        inner = node.inputs[0]
+        if var.ndim == inner.ndim == 1:
+            return _slice_positions(inner, parent, length)
+        return None
+
+    if node.inputs[0] is not parent:
+        return None
+
+    def const(v):
+        return None if v is None else int(pt.as_tensor(v).eval())
+
+    if isinstance(node.op, Subtensor):
+        try:
+            [idx] = get_idx_list(node.inputs, node.op.idx_list)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(idx, slice):
+            return None
+        try:
+            return np.arange(length)[slice(const(idx.start), const(idx.stop), const(idx.step))]
+        except Exception:
             return None
 
-    if len(lengths) != 1:
+    if isinstance(node.op, Split):
+        # `axis` lives on the op; inputs are (x, splits).
+        if getattr(node.op, "axis", 0) != 0:
+            return None
+        try:
+            splits = np.asarray(node.inputs[1].eval(), dtype=int)
+        except Exception:
+            return None
+        i = node.outputs.index(var)
+        start = int(splits[:i].sum())
+        return np.arange(start, start + int(splits[i]))
+
+    return None
+
+
+def _block_parent(var):
+    """The variable `var` is a block of, walking through shape ops."""
+    node = var.owner
+    if node is None:
         return None
-    return lengths.pop()
+    if isinstance(node.op, SplitDims | Reshape | SpecifyShape):
+        return _block_parent(node.inputs[0])
+    if isinstance(node.op, Split | Subtensor):
+        return node.inputs[0]
+    return None
 
 
-def marginalize_subset(model, name):
-    """Marginalize the rows of `name` that nothing downstream reads.
+def marginalize_named_subset(model, name):
+    """Marginalize the named sub-block `name` of a Gaussian latent.
 
-    Their factor in the joint integrates to one, so the posterior over the
-    remaining rows is unchanged -- this is marginalization in the degenerate
-    case, needing no conjugacy. The returned model samples only the rows that
-    reach the likelihood.
-
-    Recover the dropped rows with ``project`` / ``conditional_covariance``,
-    which give exactly the conditional they would have been sampled from, at
-    the packed inputs or at any others.
+    The returned model samples only the coordinates that remain. Recover the
+    dropped ones with ``conditional(m2)[name]``, which carries the exact
+    Gaussian conditional.
     """
-    fg, memo = fgraph_from_model(model)
-    rv_out = memo[model[name]]
+    fg, _memo = fgraph_from_model(model)
 
-    [model_rv] = [
-        v for v in fg.variables if v.owner and isinstance(v.owner.op, ModelFreeRV) and v is rv_out
+    named = [
+        v
+        for v in fg.variables
+        if v.owner and isinstance(v.owner.op, ModelNamed) and v.owner.op.name == name
     ]
+    if not named:
+        raise ValueError(
+            f"{name!r} is not a named variable of this model. Register the block with "
+            "`name_variable(name, rv[...])` before marginalizing it."
+        )
+    [named_var] = named
+
+    # Structural, not an ancestor scan: hyperpriors are ancestors too, and the
+    # parent is specifically the variable this block slices.
+    model_rv = _block_parent(named_var.owner.inputs[0])
+    if model_rv is None or not isinstance(getattr(model_rv.owner, "op", None), ModelFreeRV):
+        raise NotImplementedError(f"{name!r} is not a slice of a free RV of this model.")
     rv = model_rv.owner.inputs[0]
     if not isinstance(rv.owner.op, MvNormal):
-        raise NotImplementedError(f"{name} is not an MvNormal")
+        raise NotImplementedError(f"{name!r} is a block of {model_rv.name!r}, not an MvNormal")
 
-    n_obs = _observed_prefix(fg, model_rv)
-    if n_obs is None:
+    [length] = rv.type.shape or (None,)
+    if length is None:
+        raise NotImplementedError(f"{model_rv.name!r} has no static length to partition")
+
+    drop = _slice_positions(named_var.owner.inputs[0], model_rv, length)
+    if drop is None or len(drop) == 0:
         raise NotImplementedError(
-            f"Uses of {name} are not a single leading slice; cannot identify an unobserved block."
+            f"{name!r} is not a non-empty static slice of {model_rv.name!r}'s leading axis."
         )
+
+    keep_mask = np.ones(length, dtype=bool)
+    keep_mask[drop] = False
+    keep_idx = set(np.flatnonzero(keep_mask).tolist())
 
     mu, cov = rv.owner.op.dist_params(rv.owner)
     if rv in ancestors([mu, cov]):
         raise NotImplementedError("Self-referential prior parameters")
 
-    # The dropped rows stay reachable as the op's first output, which is what
-    # lets `conditional` hand them back; the kept block is its second.
-    _unobs, obs = build_subset_marginal(
-        rv, n_obs, marginalized_name=f"{name}_unobserved", marginalized_dims=()
-    )
+    # Every variable that reads a block of the parent, with the positions it
+    # reads. Scanning is simpler than walking clients, because a block can sit
+    # under a chain of shape ops.
+    blocks = {}
+    for v in fg.variables:
+        positions = _slice_positions(v, model_rv, length)
+        if positions is not None:
+            blocks[v] = positions
 
-    # name / dims / transform live on the Op, not among the inputs
+    # Keep the outermost: a block whose own consumers are blocks too is an
+    # intermediate (the Split under a reshape), not something to rewire.
+    outermost = {
+        v: pos
+        for v, pos in blocks.items()
+        if not any(
+            out in blocks
+            for client, _ in fg.clients.get(v, [])
+            if not isinstance(getattr(client, "op", None), Output)
+            for out in client.outputs
+        )
+    }
+
+    # Validation, not inference: every other use of the parent must stay inside
+    # the kept block, or dropping these rows would change the model.
+    named_block = named_var.owner.inputs[0]
+
+    # The block itself must be read by nothing but its own name handle.
+    if [
+        client
+        for client, _ in fg.clients.get(named_block, [])
+        if client is not named_var.owner and not isinstance(getattr(client, "op", None), Output)
+    ]:
+        raise NotImplementedError(
+            f"{name!r} is read by the model, so its factor does not integrate to one. "
+            f"Integrating out a block something depends on is a conjugacy problem, which "
+            f"`marginalize` handles for a whole variable but not for a sub-block."
+        )
+
+    other_uses, kept_uses = [], []
+    for v, positions in outermost.items():
+        if v is named_block:
+            continue
+        if not fg.clients.get(v):
+            continue
+        if set(positions.tolist()) <= keep_idx:
+            kept_uses.append(v)
+        else:
+            other_uses.append(v)
+
+    direct = [
+        client
+        for client, _ in fg.clients.get(model_rv, [])
+        if not isinstance(getattr(client, "op", None), Output)
+        and not any(out in blocks for out in client.outputs)
+    ]
+    if other_uses or direct:
+        raise NotImplementedError(
+            f"Something downstream reads coordinates of {model_rv.name!r} that {name!r} "
+            f"would marginalize away. Integrating those out is a conjugacy problem, which "
+            f"`marginalize` handles for a whole variable but not for a sub-block."
+        )
+
+    _unobs, obs = build_subset_marginal(rv, keep_mask, marginalized_name=name)
+
     op = model_rv.owner.op
     [value] = model_rv.owner.inputs[1:]
     new_value = obs.type()
     new_value.name = value.name
     new_model_rv = model_free_rv(obs, new_value, op.transform, op.name, *op.dims)
 
-    # every use was `rv[:n_obs]`, which the reduced variable now supplies whole
-    slice_uses = [
-        client.outputs[0]
-        for client, _ in list(fg.clients[model_rv])
-        if not isinstance(getattr(client, "op", None), Output)
-    ]
-    fg.replace_all([(u, new_model_rv) for u in slice_uses], import_missing=True)
+    # Every remaining use read exactly the kept block, which the reduced
+    # variable now supplies whole.
+    if kept_uses:
+        fg.replace_all([(v, new_model_rv) for v in kept_uses], import_missing=True)
 
-    # `model_rv` is itself an fgraph output, and the replacement has a different
-    # shape, so the output list is rebuilt rather than swapped in place.
-    new_outputs = [new_model_rv if out is model_rv else out for out in fg.outputs]
-    return model_from_fgraph(FunctionGraph(outputs=new_outputs, clone=False))
+    # The parent shrinks and the name handle is consumed, so rebuild the output
+    # list rather than swapping in place.
+    outputs = [
+        new_model_rv if out is model_rv else out for out in fg.outputs if out is not named_var
+    ]
+    return model_from_fgraph(FunctionGraph(outputs=outputs, clone=False))

@@ -6,10 +6,10 @@ out. Their factor integrates to one, so the posterior over the rows that remain
 is unchanged and no conjugacy is required.
 
 This is the only `MarginalRV` whose marginalized quantity is part of a variable
-rather than a whole one, so the op carries the partition (`n_obs`) and its logp
-is the marginal over the kept block:
+rather than a whole one, so the op carries the partition as a boolean mask and
+its logp is the marginal over the kept block:
 
-    f ~ MvNormal(m, K)   partitioned into  f_o = f[:n_obs], f_u = f[n_obs:]
+    f ~ MvNormal(m, K)   partitioned into  f_o = f[keep], f_u = f[~keep]
     f_o ~ MvNormal(m_o, K_oo)
     f_u | f_o ~ MvNormal(m_u + K_uo K_oo^-1 (f_o - m_o), K_uu - K_uo K_oo^-1 K_ou)
 
@@ -25,6 +25,7 @@ when the model is built. Predicting elsewhere still means evaluating the kernel
 at inputs the model never saw, which is what `project` is for.
 """
 
+import numpy as np
 import pytensor.tensor as pt
 
 from pymc import MvNormal
@@ -43,33 +44,46 @@ __all__ = ["SubsetMarginalRV", "build_subset_marginal"]
 
 
 class SubsetMarginalRV(MarginalRV):
-    """An `MvNormal` whose trailing ``n - n_obs`` coordinates are marginalized.
+    """An `MvNormal` with the coordinates outside ``keep_mask`` marginalized.
 
     Outputs are ``[f_unobserved, f_observed, *rng_updates]``, following the
     ``[marginalized_rv, *dependent_rvs]`` convention: the kept block is treated
     as the single dependent, since it is what the rest of the model reads.
+
+    The partition is a boolean mask rather than a split point, so the dropped
+    coordinates need not be contiguous or trailing.
     """
 
-    def __init__(self, *args, n_obs: int, **kwargs):
-        self.n_obs = n_obs
+    def __init__(self, *args, keep_mask, **kwargs):
+        self.keep_mask = np.asarray(keep_mask, dtype=bool)
         super().__init__(*args, n_dependent_rvs=1, **kwargs)
 
 
 def _partition(op, inputs):
     """``(m_o, m_u, K_oo, K_uo, K_uu)`` from the op's own inputs."""
     _rng, mu, cov = inputs
-    n = op.n_obs
+    keep = np.flatnonzero(op.keep_mask)
+    drop = np.flatnonzero(~op.keep_mask)
     mu = pt.atleast_1d(pt.broadcast_to(mu, (cov.shape[0],)))
-    return mu[:n], mu[n:], cov[:n, :n], cov[n:, :n], cov[n:, n:]
+    return (
+        mu[keep],
+        mu[drop],
+        cov[np.ix_(keep, keep)],
+        cov[np.ix_(drop, keep)],
+        cov[np.ix_(drop, drop)],
+    )
 
 
-def build_subset_marginal(rv, n_obs: int, marginalized_name: str, marginalized_dims=()):
+def build_subset_marginal(rv, keep_mask, marginalized_name: str, marginalized_dims=()):
     """Wrap an `MvNormal` node into a `SubsetMarginalRV`.
 
     Returns ``(unobserved_out, observed_out)``. Both come from one draw of the
     joint, so the generative semantics are unchanged.
     """
     rng, _size, mu, cov = rv.owner.inputs
+    keep_mask = np.asarray(keep_mask, dtype=bool)
+    keep = np.flatnonzero(keep_mask)
+    drop = np.flatnonzero(~keep_mask)
 
     rng_i, mu_i, cov_i = rng.type(), mu.type(), cov.type()
     full = MvNormal.dist(mu=mu_i, cov=cov_i, rng=rng_i)
@@ -77,8 +91,8 @@ def build_subset_marginal(rv, n_obs: int, marginalized_name: str, marginalized_d
 
     op = SubsetMarginalRV(
         inputs=[rng_i, mu_i, cov_i],
-        outputs=[full[n_obs:], full[:n_obs], *updates.values()],
-        n_obs=n_obs,
+        outputs=[full[drop], full[keep], *updates.values()],
+        keep_mask=keep_mask,
         marginalized_name=marginalized_name,
         marginalized_dims=marginalized_dims,
     )

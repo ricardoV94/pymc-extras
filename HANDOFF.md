@@ -113,7 +113,15 @@ registered.
   general affine map `W @ gp` rather than a slice.
 * **`SubsetMarginalRV`** (`distributions/subset_gaussian.py`). The only
   `MarginalRV` whose marginalized quantity is a *sub-block* of a variable, so
-  the op carries the partition `n_obs`. Its logp is the marginal over the kept
+  the op carries the partition as a boolean mask (dropped rows need not be
+  contiguous or trailing). Driven by `marginalize_named_subset(model, name)`,
+  where the block is identified by `name_variable(name, gp[...])` -- a
+  `ModelNamed` handle, which is neither a free RV (the sampler would explore it)
+  nor a `Deterministic` (which blocks marginalizing `gp` at all). Naming it
+  means `conditional` returns it under that name, and that the partition is
+  *validated* rather than inferred: both "the block is read" and "something else
+  reads dropped rows" are explicit errors, where the old `_observed_prefix` scan
+  guessed and silently declined. Its logp is the marginal over the kept
   block and its `marginalized_conditional` is the Gaussian conditional of the
   dropped one -- which *is* `project` + `conditional_covariance`, now living
   inside a generic op instead of a GP-specific helper. Verified against the
@@ -146,7 +154,11 @@ registered.
 1. **Woodbury / structured covariance** — the standing scaling item; `A K A'` is
    densified, so sparse is O(n^2.3) not O(n m^2). Same work item as low-rank
    ADVI guides.
-2. **Reversible `marginalize_subset`.** `SubsetMarginalRV` landed and
+2. **Fold it into `marginalize`.** `marginalize(m, ["f_pred"])` should work, so
+   there is one entry point for whole variables and sub-blocks. Currently
+   `marginalize_named_subset` is separate. The naming design removes the
+   obstacle that made this awkward.
+3. **Reversible sub-block marginalization.** `SubsetMarginalRV` landed and
    `conditional` recovers the dropped block, but `unmarginalize` **declines**:
    restoring the two halves as separate free RVs gives one shared `MvNormal`
    draw sliced twice, whose joint logp pymc cannot derive (verified: it raises

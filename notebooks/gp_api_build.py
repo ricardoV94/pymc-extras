@@ -550,9 +550,10 @@ with pm.Model() as packed_model:
     Xs, shapes = pt.pack(X, X_pred, keep_axes=-1)
     gp_p = pgp.GP("gp", Xs, cov=pgp.kernels.Matern52(ls=ls_p))
     f_train, f_pred_slice = pt.unpack(gp_p, shapes)
+    pgp.name_variable("f_pred", f_pred_slice)      # the handle to marginalize
     pm.Bernoulli("y", logit_p=f_train, observed=(y > 0).astype(int))
 
-reduced = pgp.marginalize_subset(packed_model, "gp")
+reduced = pgp.marginalize_named_subset(packed_model, "f_pred")
 print("packed gp :", packed_model["gp"].type.shape)
 print("reduced   :", reduced["gp"].type.shape, " <- the 80 unread rows are gone")
 
@@ -570,15 +571,16 @@ print("logp matches it exactly:",
 md(r"""
 The dropped rows are not discarded: they are kept as an unused output of a
 `SubsetMarginalRV`, whose conditional is the Gaussian conditional of the block
-given the rest. So `conditional` hands them back on its own, with no GP-specific
-call and no chance of pairing a posterior mean with the wrong covariance:
+given the rest. So `conditional` hands them back under the name you gave them,
+with no GP-specific call and no chance of pairing a posterior mean with the
+wrong covariance:
 """)
 
 code("""
 cond_sub = pgp.conditional(reduced)
 print("free_RVs:", [v.name for v in cond_sub.free_RVs], " <- the dropped block is back")
 
-rv_u = cond_sub["gp_unobserved"]
+rv_u = cond_sub["f_pred"]
 mu_u, cov_u = rv_u.owner.op.dist_params(rv_u.owner)
 f_obs = np.sin(6 * X.ravel())
 point = {"ls_log__": np.log(0.3), "gp": f_obs}
@@ -597,11 +599,17 @@ print("                                      max |sd diff| =",
       float(np.abs(got_sd - ref_sd).max()))
 print("(two equivalent factorizations of an ill-conditioned K; round-off, not disagreement)")
 
-from pymc_extras.model.marginal.marginalize import unmarginalize
+# naming a block the likelihood reads is a conjugacy problem, and declines
+with pm.Model() as read_model:
+    Xs2, sh2 = pt.pack(X, X_pred, keep_axes=-1)
+    g2 = pgp.GP("gp", Xs2, cov=pgp.kernels.Matern52(ls=0.3))
+    a, b = pt.unpack(g2, sh2)
+    pgp.name_variable("f_train", a)
+    pm.Bernoulli("y", logit_p=a, observed=(y > 0).astype(int))
 try:
-    unmarginalize(reduced)
+    pgp.marginalize_named_subset(read_model, "f_train")
 except NotImplementedError as exc:
-    print("unmarginalize declines:", str(exc)[:80], "...")
+    print("declines:", str(exc)[:76], "...")
 """)
 
 md(r"""

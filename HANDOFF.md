@@ -111,6 +111,12 @@ registered.
   `conditional_covariance`, `prior_variance_correction` match closed forms both
   on a fresh GP and off `conditional(...)`, including when the observation is a
   general affine map `W @ gp` rather than a slice.
+* **Zero-dependent marginalization.** `marginalize` on an RV nothing depends on
+  used to silently no-op. It now does the well-defined thing: the factor
+  integrates to one, so the variable is dropped, and a `ModelNamed` anchor keeps
+  the `TrivialMarginalRV` reachable so `conditional` (returns the prior) and
+  `unmarginalize` (round-trips) can still find it. Verified: marginal logp
+  equals full logp minus the dropped variable's, exactly.
 * **`gp/gp.py` — `predictive_moments(gp, X_new, mu, cov)`.** Recovers the exact
   GP predictive to 1e-6 from the conditional's moments. The naive path it
   replaces (`conditional_covariance` on a posterior mean) understated variance
@@ -129,19 +135,31 @@ registered.
 1. **`SubsetMarginalRV`.** Rather than `marginalize_subset` discarding the
    dropped rows, keep them as an unused output of a `MarginalRV`, following
    `linear_gaussian.py`'s pattern (op + `_logprob` + `marginalized_conditional`).
-   Then plain `conditional()` recovers the block with no new function, and the
-   recovery information travels inside the op. Note this is a *refactor*, not new
-   capability: `project` + `predictive_moments` already recover the block
-   correctly. It buys API uniformity, at the cost of a new op class and an entry
-   point that does not currently go through `marginalize_fgraph`.
+   Then plain `conditional()` recovers the block with no new function.
 
-   This is now the only item left on the original list.
+   **The blocker for this is now gone.** It needed a way for a `MarginalRV` node
+   to stay reachable in the model fgraph with nothing referencing it; that is
+   exactly `anchor_marginalized_output` / `drop_marginalized_anchor` in
+   `rewrites.py`, built for the zero-dependent case (see below). Follow
+   `distributions/trivial.py`, which is the smallest complete example of a
+   `MarginalRV` subclass + rewrite + conditional.
 
+   Still a refactor rather than new capability: `project` + `predictive_moments`
+   already recover the block correctly.
+
+2. **Woodbury / structured covariance** — the standing scaling item; `A K A'` is
+   densified, so sparse is O(n^2.3) not O(n m^2). Same work item as low-rank
+   ADVI guides.
 
 ## 5. The notebook
 
 `notebooks/gp_api.ipynb`, generated from `gp_api_build.py` and executed by
 `gp_api_execute.py`. **Edit the builder, never the `.ipynb`.**
+
+`gp_api_execute.py --fast` shrinks draws/tune/iterations and discards the
+result: ~1 minute, and it is how to check the notebook still runs end to end
+after a code change. Only do a full run to regenerate the deliverable, since the
+fast run's numbers and figures are noise.
 
 **Now at the target shape**: 25 cells, 7 figures, executed clean. The idea and
 concept table; kernels; the prior (training inputs only); the building blocks;

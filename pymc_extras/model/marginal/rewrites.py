@@ -1,4 +1,4 @@
-from pymc.model.fgraph import ModelValuedVar, model_free_rv
+from pymc.model.fgraph import ModelNamed, ModelValuedVar, model_free_rv, model_named
 from pymc.pytensorf import collect_default_updates
 from pytensor.compile import SharedVariable
 from pytensor.compile.mode import optdb
@@ -152,6 +152,31 @@ def extract_marginal_subgraph(node):
     return boundary, outputs
 
 
+def anchor_marginalized_output(fgraph, var, name):
+    """Keep a client-less MarginalRV output reachable from the model fgraph.
+
+    A `MarginalRV` with no dependent RVs is referenced by nothing, so it would
+    be pruned and `conditional`/`unmarginalize` could never find it again.
+    `ModelNamed` anchors it: named and reachable, but not a free RV, which
+    would hand it back to the sampler.
+    """
+    fgraph.add_output(model_named(var, name), reason="marginal-anchor", import_missing=True)
+
+
+def drop_marginalized_anchor(fgraph, var):
+    """Remove the `ModelNamed` anchor on `var`, if it has one.
+
+    Called when the variable is recovered, so it is not registered twice --
+    once as the anchor and once as the free RV that replaces it.
+    """
+    for client, _ in list(fgraph.clients.get(var, [])):
+        if client == "output" or not isinstance(getattr(client, "op", None), ModelNamed):
+            continue
+        out = client.outputs[0]
+        if out in fgraph.outputs:
+            fgraph.remove_output(fgraph.outputs.index(out))
+
+
 @node_rewriter(tracks=[MarginalRV])
 def local_unmarginalize(fgraph, node):
     all_outputs = inline_ofg_outputs(node.op, node.inputs)
@@ -172,19 +197,23 @@ def local_unmarginalize(fgraph, node):
     # Restore the model-variable output that was dropped when the variable was
     # marginalized, so the recovered RV survives even with no dependent clients.
     # import_missing imports the new value variable as an input.
+    drop_marginalized_anchor(fgraph, node.outputs[0])
     fgraph.add_output(unmarginalized_free_rv, reason="unmarginalize", import_missing=True)
 
     # Pin already-built model-var wrappers (opaque ModelValuedVar) as boundaries so
     # graph_replace does not clone their subgraphs, otherwise a shared upstream RV
     # they wrap (e.g. a previously unmarginalized parent) gets duplicated.
-    pinned = {
-        a: a
-        for a in ancestors(dependent_rvs)
-        if a.owner is not None and isinstance(a.owner.op, ModelValuedVar)
-    }
-    dependent_rvs = graph_replace(
-        dependent_rvs, {**pinned, unmarginalized_rv: unmarginalized_free_rv}
-    )
+    # With no dependents there is nothing to rewire, and graph_replace would
+    # reject the unused replacement.
+    if dependent_rvs:
+        pinned = {
+            a: a
+            for a in ancestors(dependent_rvs)
+            if a.owner is not None and isinstance(a.owner.op, ModelValuedVar)
+        }
+        dependent_rvs = graph_replace(
+            dependent_rvs, {**pinned, unmarginalized_rv: unmarginalized_free_rv}
+        )
 
     return [unmarginalized_free_rv, *dependent_rvs, *rngs]
 

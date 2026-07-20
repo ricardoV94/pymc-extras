@@ -21,6 +21,8 @@ unpacking anything that came out of `marginalize` or `conditional`.
 import pymc as pm
 import pytensor.tensor as pt
 
+from pytensor.graph.traversal import ancestors
+
 from pymc_extras.gp.data import build_kernel_op, kernel_of
 from pymc_extras.model.marginal import (  # noqa: F401
     conditional,
@@ -75,21 +77,26 @@ def conditional_moments(model, name="gp"):
 def predictive_fn(model, outs):
     """Compile ``outs`` into a callable taking a posterior point.
 
-    Two wrinkles this papers over: the outputs must have RVs swapped for value
-    variables before compiling, and the recovered variable is itself a free RV
-    of `model`, so its value var is an unused input.
+    The wrinkle this papers over: the outputs must have RVs swapped for value
+    variables before compiling. Most of `model`'s value vars are then irrelevant
+    -- the recovered variable's own, and any from a prediction block added after
+    fitting (`f_pred`, `y_new`) -- so only the ones the outputs actually reach
+    are declared as inputs.
 
-    Every value var the point does not supply falls back to the initial point.
-    Besides the recovered variable, a prediction block added after fitting
-    (`f_pred`, `y_new`) contributes free RVs a posterior point knows nothing
-    about, and the outputs do not depend on them either.
+    Extra entries in the point are dropped, so the caller can pass a whole
+    posterior point and each set of outputs takes the subset it depends on. A
+    value that *is* needed and missing is left to `fn`, which raises
+    ``Missing input`` -- never filled in with a default that would quietly
+    give a wrong answer.
     """
     outs = model.replace_rvs_by_values(list(outs))
-    fn = model.compile_fn(outs, inputs=model.value_vars, point_fn=True, on_unused_input="ignore")
-    dummy = model.initial_point()
+    needed = set(ancestors(outs))
+    inputs = [v for v in model.value_vars if v in needed]
+    fn = model.compile_fn(outs, inputs=inputs, point_fn=True)
+    names = {v.name for v in inputs}
 
     def call(point):
-        return fn({**dummy, **point})
+        return fn({k: v for k, v in point.items() if k in names})
 
     return call
 

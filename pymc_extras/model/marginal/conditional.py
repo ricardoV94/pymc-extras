@@ -27,6 +27,7 @@ from pymc_extras.model.marginal.marginalize import (
     marginalize_fgraph,
     unmarginalize_fgraph,
 )
+from pymc_extras.model.marginal.rewrites import drop_marginalized_anchor
 
 
 def _find_marg_rv(fg, var_name):
@@ -136,6 +137,7 @@ def conditional_fgraph(
         conditional_free_rv = model_free_rv(
             sample_graph, value, None, var_name, *op.marginalized_dims
         )
+        drop_marginalized_anchor(fg, marg_node.outputs[0])
         fg.add_output(conditional_free_rv, reason="conditionalize", import_missing=True)
         recovered[var_name] = conditional_free_rv
 

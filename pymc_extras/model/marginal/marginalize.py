@@ -46,6 +46,7 @@ from pymc_extras.model.marginal.rewrites import (
     LaplaceMarginalSubgraph,
     MarginalSubgraph,
     MarginalSubgraphBase,
+    anchor_marginalized_output,
     local_unmarginalize,
     marginalize_rewrites_db,
 )
@@ -169,6 +170,11 @@ def _replace_marginal_subgraph(
     if new_outputs[0] in fgraph.outputs:
         fgraph.remove_output(fgraph.outputs.index(new_outputs[0]))
 
+    # With no dependents nothing else references the marker, so anchor it or it
+    # is pruned and can never be recovered.
+    if n_dep == 0:
+        anchor_marginalized_output(fgraph, new_outputs[0], rv_to_marginalize.name)
+
     for i, dep in enumerate(dependent_rvs):
         ms_dep = new_outputs[1 + i]
         if isinstance(dep.owner.op, ModelValuedVar):
@@ -209,14 +215,9 @@ def marginalize_fgraph(
     ):
         all_rvs = [node.out for node in fg.toposort() if isinstance(node.op, ModelValuedVar)]
 
+        # No dependents is the degenerate case, not an error: the variable's
+        # factor integrates to one. See distributions/trivial.py.
         dependent_rvs = find_conditional_dependent_rvs(rv_to_marginalize, all_rvs)
-        if not dependent_rvs:
-            raise NotImplementedError(
-                f"Cannot marginalize {rv_to_marginalize}: nothing depends on it. Its "
-                "factor integrates to one, so it can be dropped outright, but the "
-                "returned model would then have no way to recover it. Remove it from "
-                "the model, or keep it and marginalize only what feeds the likelihood."
-            )
 
         # Issue warning for IntervalTransform on dependent RVs
         for dependent_rv in dependent_rvs:

@@ -186,3 +186,34 @@ def predictive_moments(gp, X_new, mu, cov, jitter=1e-6):
     pred_cov = A @ cov @ A.T + conditional_covariance(gp, X_new, jitter)
     pred_cov = 0.5 * (pred_cov + pred_cov.T)
     return A @ pt.as_tensor(mu), pred_cov
+
+
+def conditional_at(name, X_new, gp, jitter=1e-6, dims=None, model=None):
+    """Register the GP conditional at `X_new` as a new `MvNormal`.
+
+    This is the whole prediction API::
+
+        with fitted_model:
+            f_pred = pgp.conditional_at("f_pred", X_new, gp)
+            pm.Bernoulli("y_new", logit_p=f_pred)  # the model's own likelihood
+        pm.sample_posterior_predictive(idata, sample_vars=["f_pred", "y_new"])
+
+    It is ``MvNormal(project(gp, X_new), conditional_covariance(gp, X_new))``,
+    which is the GP conditional. Building it by hand also works, and is what the
+    "building blocks" section shows; the point of the helper is that the two
+    pieces belong together. Reaching for `conditional_covariance` while pairing
+    it with a posterior *mean* instead of draws silently understates the spread
+    -- see `predictive_moments`, which is the correct closed form for that case.
+
+    Not to be confused with `pymc_extras.gp.conditional`, which transforms a
+    *model* to recover a marginalized latent. This adds a variable to the model
+    you are already in, and works the same whether `gp` was integrated out,
+    sampled, or fitted variationally, because all it needs is draws of `gp`.
+    """
+    return pm.MvNormal(
+        name,
+        mu=project(gp, X_new, jitter),
+        cov=conditional_covariance(gp, X_new, jitter),
+        dims=dims,
+        model=model,
+    )

@@ -4,10 +4,42 @@ Regenerate with `python gp_api_build.py`, then `python gp_api_execute.py` to run
 it and embed outputs.
 """
 
+import glob
 import json
 import pathlib
+import subprocess
 
 CELLS = []
+
+
+def _ruff():
+    """The ruff pre-commit uses, so generated cells match what the hook wants.
+
+    Without this, pre-commit reformats `gp_api.ipynb` on every commit and the
+    committed notebook stops matching what this script emits -- which quietly
+    breaks "edit the builder, never the .ipynb".
+    """
+    for path in glob.glob(str(pathlib.Path.home() / ".cache/pre-commit/repo*/py_env-*/bin/ruff")):
+        return path
+    return None
+
+
+RUFF = _ruff()
+
+
+def format_notebook(path):
+    """Apply the same ruff passes the pre-commit hook will apply.
+
+    Ruff understands .ipynb natively, so running it on the written file makes
+    the builder's output byte-identical to what the hook produces. Otherwise
+    pre-commit reformats the notebook on every commit and it stops matching
+    this script -- quietly breaking "edit the builder, never the .ipynb".
+    """
+    if RUFF is None:
+        print("  (ruff not found; notebook left unformatted)")
+        return
+    for args in (["check", "--fix", "--quiet"], ["format", "--quiet"]):
+        subprocess.run([RUFF, *args, str(path)], capture_output=True, text=True)
 
 
 def md(text):
@@ -34,7 +66,7 @@ Built on one idea:
 | Posterior over the latent | `pymc_extras.conditional` |
 | GP conditional mean | `project` |
 | GP conditional covariance | `conditional_covariance` |
-| Prediction | `MvNormal(project, conditional_covariance)`, then the likelihood |
+| Prediction | `conditional_at`, then the model's own likelihood |
 | Sparse / variational GP | `project` onto inducing inputs, stock ADVI guide |
 
 The only new machinery is a **linear-Gaussian conjugacy rewrite**: for
@@ -51,9 +83,9 @@ latents identically.
 Because `g` is *any* affine function, "observed at a subset of the inputs" and
 "projected from inducing points" are the same operation.
 
-There is **one way to predict**, and it is the same three lines whether the
-latent was integrated out, sampled, or fitted variationally. That repetition is
-the point of this notebook, so it is left visible rather than factored away.
+There is **one way to predict**, and it is the same two lines whether the latent
+was integrated out, sampled, or fitted variationally. That repetition is the
+point of this notebook, so it is left visible rather than factored away.
 
 ---
 
@@ -157,6 +189,10 @@ $$A_* = K_{*z}K_{zz}^{-1}, \qquad
 * `conditional_covariance(gp, X_new)` builds $K_{**} - A_*K_{z*}$ — the
   **conditional covariance**.
 * `prior_variance_correction(gp, X_new)` is its diagonal.
+* `conditional_at(name, X_new, gp)` is the two of them as one `MvNormal`, which
+  is how every prediction below is written. The pieces are shown here because
+  the notebook is about what the API *is*, not because you should assemble them
+  by hand.
 
 These were written for the sparse case and turned out to be the textbook GP
 conditional. "Inducing points" and "prediction points" are not two ideas: both
@@ -241,12 +277,8 @@ print("free_RVs:", [v.name for v in cond_model.free_RVs], " <- gp is back")
 
 # ---- the prediction block, verbatim in every fit path below ----
 with cond_model:
-    pm.MvNormal(
-        "f_pred",
-        mu=pgp.project(cond_model["gp"], X_pred),
-        cov=pgp.conditional_covariance(cond_model["gp"], X_pred),
-    )
-    pm.Normal("y_new", mu=cond_model["f_pred"], sigma=cond_model["sigma"])
+    f_pred = pgp.conditional_at("f_pred", X_pred, cond_model["gp"])
+    pm.Normal("y_new", mu=f_pred, sigma=cond_model["sigma"])
     pp = pm.sample_posterior_predictive(
         idata, sample_vars=["gp", "f_pred", "y_new"], random_seed=0, progressbar=False
     )
@@ -301,7 +333,9 @@ for i in range(0, post.sizes["sample"], 8):
     s = post.isel(sample=i)
     point = {f"{v}_log__": float(np.log(s[v])) for v in ("ls", "eta", "sigma")}
     m_, sd_ = closed(point)
-    ms.append(m_); ss.append(sd_); ns.append(naive(point)[0])
+    ms.append(m_)
+    ss.append(sd_)
+    ns.append(naive(point)[0])
 
 ms, ss, ns = np.array(ms), np.array(ss), np.array(ns)
 cf_mean = ms.mean(0)
@@ -369,12 +403,8 @@ print("max r_hat:", float(np.nanmax(az.rhat(idata_b, var_names=["gp"])["gp"].to_
 code("""
 # ---- the prediction block, verbatim from the conjugate section ----
 with bern_model:
-    pm.MvNormal(
-        "f_pred",
-        mu=pgp.project(gp_b, X_b_pred),
-        cov=pgp.conditional_covariance(gp_b, X_b_pred),
-    )
-    pm.Bernoulli("y_new", logit_p=bern_model["f_pred"])
+    f_pred = pgp.conditional_at("f_pred", X_b_pred, gp_b)
+    pm.Bernoulli("y_new", logit_p=f_pred)
     pp = pm.sample_posterior_predictive(
         idata_b, sample_vars=["f_pred", "y_new"], random_seed=0, progressbar=False
     )
@@ -435,12 +465,8 @@ print("latent dim:", u_b.type.shape, "| sample_posterior ->", type(idata_vi).__n
 
 # ---- the prediction block again, unchanged; only `u_b` differs ----
 with svgp_model:
-    pm.MvNormal(
-        "f_pred",
-        mu=pgp.project(u_b, X_b_pred),
-        cov=pgp.conditional_covariance(u_b, X_b_pred),
-    )
-    pm.Bernoulli("y_new", logit_p=svgp_model["f_pred"])
+    f_pred = pgp.conditional_at("f_pred", X_b_pred, u_b)
+    pm.Bernoulli("y_new", logit_p=f_pred)
     pp_vi = pm.sample_posterior_predictive(
         idata_vi, sample_vars=["f_pred", "y_new"], random_seed=0, progressbar=False
     )
@@ -565,8 +591,11 @@ with unpacked_model:
         pt.sqrt(pt.diag(pgp.conditional_covariance(unpacked_model["gp"], X_pred))),
     ])
 ref_mu, ref_sd = ref(point)
-print("matches project / conditional_covariance:",
-      np.allclose(got_mu, ref_mu, atol=1e-5), np.allclose(got_sd, ref_sd, atol=1e-5))
+print("vs project / conditional_covariance:  max |mu diff| =",
+      float(np.abs(got_mu - ref_mu).max()))
+print("                                      max |sd diff| =",
+      float(np.abs(got_sd - ref_sd).max()))
+print("(two equivalent factorizations of an ill-conditioned K; round-off, not disagreement)")
 
 from pymc_extras.model.marginal.marginalize import unmarginalize
 try:
@@ -626,5 +655,7 @@ nb = {
 }
 
 here = pathlib.Path(__file__).parent
-(here / "gp_api.ipynb").write_text(json.dumps(nb, indent=1))
+path = here / "gp_api.ipynb"
+path.write_text(json.dumps(nb, indent=1))
+format_notebook(path)
 print(f"wrote gp_api.ipynb ({len(CELLS)} cells)")

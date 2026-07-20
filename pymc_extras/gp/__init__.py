@@ -17,6 +17,7 @@ from pymc_extras.gp import kernels, rewrites  # noqa: F401  (registers the Split
 from pymc_extras.gp.gp import (
     GP,
     conditional,
+    conditional_at,
     conditional_covariance,
     conditional_moments,
     marginalize,
@@ -33,6 +34,7 @@ __all__ = [
     "KarhunenLoeveExpansion",
     "ProjectedProcess",
     "conditional",
+    "conditional_at",
     "conditional_covariance",
     "conditional_moments",
     "kernels",

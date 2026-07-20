@@ -6,3 +6,4 @@ from pymc_extras.model.marginal.marginalize import (  # noqa: F401
     marginalize,
     unmarginalize,
 )
+from pymc_extras.model.marginal.subset import marginalize_subset  # noqa: F401

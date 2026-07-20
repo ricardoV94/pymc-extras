@@ -20,7 +20,9 @@ from pymc_extras.gp.gp import (
     conditional_covariance,
     conditional_moments,
     marginalize,
+    marginalize_subset,
     predictive_fn,
+    predictive_moments,
     prior_variance_correction,
     project,
 )
@@ -35,7 +37,9 @@ __all__ = [
     "conditional_moments",
     "kernels",
     "marginalize",
+    "marginalize_subset",
     "predictive_fn",
+    "predictive_moments",
     "prior_variance_correction",
     "project",
 ]

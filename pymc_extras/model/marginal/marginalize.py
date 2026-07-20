@@ -211,7 +211,12 @@ def marginalize_fgraph(
 
         dependent_rvs = find_conditional_dependent_rvs(rv_to_marginalize, all_rvs)
         if not dependent_rvs:
-            continue
+            raise NotImplementedError(
+                f"Cannot marginalize {rv_to_marginalize}: nothing depends on it. Its "
+                "factor integrates to one, so it can be dropped outright, but the "
+                "returned model would then have no way to recover it. Remove it from "
+                "the model, or keep it and marginalize only what feeds the likelihood."
+            )
 
         # Issue warning for IntervalTransform on dependent RVs
         for dependent_rv in dependent_rvs:

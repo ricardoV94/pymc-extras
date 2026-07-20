@@ -389,6 +389,21 @@ def unmarginalize_fgraph(fg: FunctionGraph) -> None:
     marginalized variable is restored as a model free RV, with the dependents
     rewired to the raw draws.
     """
+    # A sub-block marginalization cannot be undone this way: the two halves come
+    # back as separate free RVs slicing one shared draw, and nothing registers a
+    # joint logp for that pair, so the model raises on first use. Refuse here
+    # rather than in the public entry point, so `conditional`'s chain-rule clone
+    # cannot reach it either.
+    subset_names = [
+        op.marginalized_name for op in _walk_marginal_ops(fg) if isinstance(op, SubsetMarginalRV)
+    ]
+    if subset_names:
+        raise NotImplementedError(
+            f"Cannot unmarginalize {subset_names}: these are sub-blocks of a Gaussian "
+            "latent, and restoring them as separate variables gives a model with no "
+            "derivable logp. Use `conditional` to recover them instead."
+        )
+
     in2out(local_unmarginalize, ignore_newtrees=False).apply(fg)
 
 
@@ -411,19 +426,6 @@ def unmarginalize(model: Model, rvs_to_unmarginalize: str | Sequence[str] | None
     """
 
     fg, _memo = fgraph_from_model(model)
-
-    # A sub-block marginalization cannot be undone this way: the two halves
-    # would come back as separate free RVs slicing one shared draw, whose joint
-    # logp pymc cannot derive. Use `conditional` to recover the dropped rows.
-    subset_names = [
-        op.marginalized_name for op in _walk_marginal_ops(fg) if isinstance(op, SubsetMarginalRV)
-    ]
-    if subset_names:
-        raise NotImplementedError(
-            f"Cannot unmarginalize {subset_names}: these are sub-blocks of a Gaussian "
-            "latent, and restoring them as separate variables would give a model with "
-            "no derivable logp. Use `conditional` to recover them instead."
-        )
 
     if rvs_to_unmarginalize is None:
         unmarginalize_fgraph(fg)

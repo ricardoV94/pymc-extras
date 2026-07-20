@@ -18,7 +18,6 @@ the transformed model -- `pt.pack(X, cond_m["X_pred"], keep_axes=-1)` -- before
 unpacking anything that came out of `marginalize` or `conditional`.
 """
 
-import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 
@@ -73,16 +72,21 @@ def conditional_moments(model, name="gp"):
     return mu, cov
 
 
-def predictive_fn(model, outs, name="gp"):
+def predictive_fn(model, outs):
     """Compile ``outs`` into a callable taking a posterior point.
 
     Two wrinkles this papers over: the outputs must have RVs swapped for value
     variables before compiling, and the recovered variable is itself a free RV
     of `model`, so its value var is an unused input.
+
+    Every value var the point does not supply falls back to the initial point.
+    Besides the recovered variable, a prediction block added after fitting
+    (`f_pred`, `y_new`) contributes free RVs a posterior point knows nothing
+    about, and the outputs do not depend on them either.
     """
     outs = model.replace_rvs_by_values(list(outs))
     fn = model.compile_fn(outs, inputs=model.value_vars, point_fn=True, on_unused_input="ignore")
-    dummy = {model.rvs_to_values[model[name]].name: np.zeros(model[name].type.shape or ())}
+    dummy = model.initial_point()
 
     def call(point):
         return fn({**dummy, **point})

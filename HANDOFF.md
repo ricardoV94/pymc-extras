@@ -87,10 +87,12 @@ build time, and it is a second way to do what `project` already does.
 | | |
 |---|---|
 | `model/marginal/distributions/linear_gaussian.py` | conjugacy rewrite: `MvNormal` latent under any affine-in-the-latent Gaussian observation. `A` never materialized (`vectorize_graph`); affineness by conservative op whitelist |
-| `gp/gp.py` | `GP`, `project`, `conditional_covariance`, `prior_variance_correction`, `conditional_moments`, `predictive_fn` |
+| `gp/gp.py` | `GP`, `project`, `conditional_covariance`, `prior_variance_correction`, `predictive_moments`, `conditional_moments`, `predictive_fn` |
 | `gp/kernels.py` | `ExpQuad`, `Matern32/52`, `WhiteNoise`, `Constant`, `+`/`*`, ARD, `active_dims` |
 | `gp/rewrites.py` | `Split` lift: partly-unused `Split` → `Subtensor`s, so `pt.unpack` costs nothing |
-| `notebooks/gp_api.ipynb` | 19 cells, 5 figures, executed |
+| `notebooks/gp_api.ipynb` | 25 cells, 7 figures, executed |
+| `gp/data.py` | `KernelOp`: the kernel as an `OpFromGraph`, so it survives `clone_model` |
+| `model/marginal/subset.py` | `marginalize_subset` |
 
 Verified numerically: `project` and `conditional_covariance` against closed
 forms; marginal logp and conditional moments against textbook GP formulas
@@ -132,7 +134,8 @@ registered.
    capability: `project` + `predictive_moments` already recover the block
    correctly. It buys API uniformity, at the cost of a new op class and an entry
    point that does not currently go through `marginalize_fgraph`.
-2. **The notebook** still has to be rewritten to the target shape in §5.
+
+   This is now the only item left on the original list.
 
 
 ## 5. The notebook
@@ -140,27 +143,29 @@ registered.
 `notebooks/gp_api.ipynb`, generated from `gp_api_build.py` and executed by
 `gp_api_execute.py`. **Edit the builder, never the `.ipynb`.**
 
-Current sections: kernels; the prior and partitioning; the building blocks; a
-conjugate likelihood; a non-conjugate likelihood (sampled); a non-conjugate
-likelihood (variational); what is missing.
+**Now at the target shape**: 25 cells, 7 figures, executed clean. The idea and
+concept table; kernels; the prior (training inputs only); the building blocks;
+conjugate (`marginalize` → sample → predict); non-conjugate sampled; and
+non-conjugate variational — all three predicting with the *same* block, marked
+off by a comment banner in each so the repetition is visible:
 
-**Target shape once the above lands** — one API throughout, the general one as
-an appendix:
+```python
+with model:
+    pm.MvNormal("f_pred", mu=pgp.project(gp, X_new),
+                cov=pgp.conditional_covariance(gp, X_new))
+    <Likelihood>("y_new", ..., f_pred)
+    pm.sample_posterior_predictive(idata, sample_vars=["f_pred", "y_new"])
+```
 
-1. The idea, and the concept table.
-2. Kernels.
-3. The prior. Training inputs only, no packing.
-4. The building blocks: `project` / `conditional_covariance` are the GP
-   conditional. Keep the closed-form check and the joint-vs-diagonal draws.
-5. Conjugate likelihood: `marginalize` → sample → predict with `project`.
-6. Non-conjugate: sample the latent → predict with `project`.
-7. Non-conjugate at scale: inducing values + variational → predict with
-   `project`. Same prediction code in 5, 6 and 7 — that is the point of the
-   notebook, so make the repetition visible rather than varying it.
-8. What is missing.
-9. **Appendix: packing.** `pack`/`unpack`, `marginalize_subset`, `conditional`,
-   and the one case that needs them — an observation that is a general affine
-   map of the latent rather than a slice.
+This works in the conjugate case because `conditional` puts `gp` back as a free
+RV, so `f_pred` is redrawn per posterior draw. `predictive_moments` is shown
+beside it as the closed-form equivalent (they agree to Monte Carlo error) and as
+the vehicle for the understated-variance trap — 360× on the notebook's data.
+
+Packing is now **appendix only**: `pt.pack`/`unpack`, `marginalize_subset`
+(140 → 60 rows, logp identical to the unpacked model), and the one case that
+needs it, `y ~ Normal(W @ f, s)`, where the observation is not a slice and
+`project` has nothing to say.
 
 Keep it a demonstration of the design, not a user guide: no decision tables, no
 "which path should I choose", no scaling studies in the body. State resolved

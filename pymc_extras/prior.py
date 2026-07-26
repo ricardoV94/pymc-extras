@@ -101,6 +101,7 @@ from pydantic.dataclasses import dataclass
 from pymc.distributions.shape_utils import Dims
 from pytensor.graph import Variable
 from pytensor.tensor import TensorVariable
+from pytensor.xtensor.type import XTensorType
 from xarray import DataArray, Dataset
 
 from pymc_extras.deserialize import deserialize, register_deserialization
@@ -522,6 +523,34 @@ def _param_value_with_dims(param: str, value, dims: Dims | None):
                 value = as_xtensor(value, dims=parameter_dims)
             else:
                 value = DataArray(value, dims=parameter_dims)
+
+    return value
+
+
+def _serialize_value(value):
+    """Encode a value for the dictionary form of a distribution.
+
+    Scalars pass through unchanged, numpy arrays become lists, and an
+    ``xarray.DataArray`` becomes a ``{"class": "DataArray", ...}`` mapping. A
+    pytensor variable is evaluated first, then handled as above.
+    """
+    if isinstance(value, Variable):
+        if isinstance(value.type, pt.TensorType):
+            value = value.eval()
+        elif isinstance(value.type, XTensorType):
+            value = DataArray(value.eval(), dims=value.type.dims)
+        else:
+            raise ValueError(f"Cannot serialize pytensor variable of type {value.type}")
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+
+    if isinstance(value, DataArray):
+        return {
+            "class": "DataArray",
+            "data": value.data.tolist(),
+            "dims": list(value.dims),
+        }
 
     return value
 
@@ -1045,28 +1074,7 @@ class Prior:
                 if isinstance(value, Prior):
                     return value.to_dict()
 
-                if isinstance(value, Variable):
-                    if isinstance(value.type, pt.TensorType):
-                        value = value.eval()
-
-                    # Avoid XTensor import warnings, remove this when the warnings are gone
-                    elif value.type.__class__.__name__.startswith("XTensor"):
-                        value = DataArray(value.eval(), dims=value.type.dims)
-
-                    else:
-                        raise ValueError(
-                            f"Prior does not know how to serialize pytensor variable of type {value.type}"
-                        )
-
-                if isinstance(value, np.ndarray):
-                    return value.tolist()
-
-                if isinstance(value, DataArray):
-                    return {
-                        "class": "DataArray",
-                        "data": value.data.tolist(),
-                        "dims": list(value.dims),
-                    }
+                value = _serialize_value(value)
 
                 if hasattr(value, "to_dict"):
                     return value.to_dict()
@@ -1722,6 +1730,42 @@ class Scaled:
 
         return det_class(name, var * self.factor, dims=self.dims)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the scaled distribution to a dictionary.
+
+        The ``factor`` is encoded the same way as ``Prior`` parameters: a
+        scalar is stored as-is, a numpy array as a list, and an ``xarray.DataArray`` as a
+        ``{"class": "DataArray", ...}`` mapping. A pytensor variable is
+        evaluated first. Non-tensor factors (arbitrary Python objects) are left
+        untouched, so a factor that is not JSON-serializable will fail at the
+        serialization layer, not here.
+
+        Returns
+        -------
+        dict[str, Any]
+            The dictionary format of the scaled distribution.
+        """
+        return {
+            "class": "Scaled",
+            "data": {
+                "dist": self.dist.to_dict(),
+                "factor": _serialize_value(self.factor),
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Scaled:
+        """Create a Scaled distribution from a dictionary."""
+        data = data["data"]
+
+        factor = data["factor"]
+        if isinstance(factor, dict):
+            factor = deserialize(factor)
+        elif isinstance(factor, list):
+            factor = np.array(factor)
+
+        return cls(dist=deserialize(data["dist"]), factor=factor)
+
 
 def _is_prior_type(data: dict) -> bool:
     return "dist" in data
@@ -1731,12 +1775,17 @@ def _is_censored_type(data: dict) -> bool:
     return data.keys() == {"class", "data"} and data["class"] == "Censored"
 
 
+def _is_scaled_type(data: dict) -> bool:
+    return data.keys() == {"class", "data"} and data["class"] == "Scaled"
+
+
 def _is_data_array_type(data: dict) -> bool:
     return data.keys() == {"class", "data", "dims"} and data["class"] == "DataArray"
 
 
 register_deserialization(is_type=_is_prior_type, deserialize=Prior.from_dict)
 register_deserialization(is_type=_is_censored_type, deserialize=Censored.from_dict)
+register_deserialization(is_type=_is_scaled_type, deserialize=Scaled.from_dict)
 register_deserialization(is_type=_is_data_array_type, deserialize=DataArray.from_dict)
 
 

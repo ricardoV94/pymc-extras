@@ -28,6 +28,13 @@ class MarginalRV(OpFromGraph, MeasurableOp):
     number of dependent RVs, are stored explicitly (``marginalized_name``,
     ``marginalized_dims``, ``n_dependent_rvs``) because pytensor makes no
     guarantee that variable names/metadata survive cloning and rewrites.
+
+    ``output_dims`` holds the dims each output carries -- the marginalized variable first, then
+    the dependents -- or None for an output that is a plain tensor. It is only set when
+    marginalizing a ``pymc.dims`` model, whose subgraph is lowered to tensors inside the op, and
+    is what lets the dims be restored on the way out (see ``local_unmarginalize``). Distinct
+    from ``marginalized_dims``, which is the model's dims metadata and exists for plain tensor
+    models too.
     """
 
     def __init__(
@@ -36,12 +43,28 @@ class MarginalRV(OpFromGraph, MeasurableOp):
         marginalized_name: str,
         marginalized_dims,
         n_dependent_rvs: int,
+        output_dims: tuple[tuple[str, ...] | None, ...] | None = None,
         **kwargs,
     ) -> None:
         self.marginalized_name = marginalized_name
         self.marginalized_dims = marginalized_dims
         self.n_dependent_rvs = n_dependent_rvs
+        self.output_dims = output_dims
         super().__init__(*args, **kwargs)
+
+    @property
+    def supp_axes(self) -> tuple[tuple[int, ...], ...] | None:
+        """For each output, which of its axes this op's density is over.
+
+        `pymc` reads this to give a deferred density term its shape, and to label it when the
+        variable carries dims. It is the `support_axes` the strategies already derive from their
+        dims_connections, with an entry prepended for the marginalized variable, which has no
+        value. None when a strategy did not derive them, which reads as "not declared".
+        """
+        support_axes = getattr(self, "support_axes", None)
+        if support_axes is None:
+            return None
+        return ((), *(tuple(axes) for axes in support_axes))
 
 
 @_support_point.register(MarginalRV)
